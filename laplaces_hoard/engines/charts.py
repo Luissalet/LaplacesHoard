@@ -107,6 +107,14 @@ def build_chart(
         if color:
             encoding["color"] = {"field": color, "type": _field_type(columns, color), "title": color}
 
+    # Vega-Lite's default for a nominal field is to sort its axis/legend
+    # alphabetically, which silently reorders a bar chart's categories away
+    # from whatever order the SQL query put them in (e.g. ORDER BY total
+    # DESC) - "sort: null" keeps the order the data already arrived in.
+    for enc in encoding.values():
+        if enc.get("type") == "nominal" and "field" in enc:
+            enc["sort"] = None
+
     spec: dict[str, Any] = {
         "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
         "data": {"values": result["rows"]},

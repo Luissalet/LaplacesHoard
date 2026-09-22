@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import katex from "katex";
 import "katex/dist/katex.min.css";
 import { Check, Trash2, X } from "lucide-react";
+import { detectLang } from "../i18n";
 
 export function Latex({ tex, display = false }: { tex: string; display?: boolean }) {
   const ref = useRef<HTMLSpanElement>(null);
@@ -59,13 +60,26 @@ export function copyCite(id: string) {
   }
 }
 
+// `toLocaleString(undefined, ...)` follows the browser/OS's own default
+// locale, which is not necessarily the language this app is showing (its
+// own ES/EN toggle) - that mismatch is exactly why a whole number could come
+// out grouped with '.' (28.530) while a decimal on the same page came out
+// with no grouping and a '.' decimal point (17445.41): each call happened to
+// resolve the ambient default locale differently. Pinning both calls to the
+// app's own chosen language keeps every number on a page consistent with
+// each other and with the rest of the UI.
+function _numberLocale(): string {
+  return detectLang() === "es" ? "es-ES" : "en-US";
+}
+
 /** Numbers for people: up to 6 significant digits, full value on hover. */
 export function fmtNum(v: unknown, digits = 6): string {
   if (typeof v !== "number") return v === null || v === undefined ? "–" : String(v);
-  if (Number.isInteger(v)) return v.toLocaleString();
+  const locale = _numberLocale();
+  if (Number.isInteger(v)) return v.toLocaleString(locale);
   const abs = Math.abs(v);
   if (abs !== 0 && (abs < 1e-4 || abs >= 1e9)) return v.toExponential(3);
-  return Number(v.toPrecision(digits)).toLocaleString(undefined, { maximumFractionDigits: 8 });
+  return Number(v.toPrecision(digits)).toLocaleString(locale, { maximumFractionDigits: 8 });
 }
 
 function fmtValue(v: unknown): ReactNode {

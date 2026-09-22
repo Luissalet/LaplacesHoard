@@ -68,7 +68,7 @@ export function DataPage({ t }: { t: T }) {
                 <Database size={13} /> <strong>{d.name}</strong>
               </span>
               <span className="faint">
-                {d.row_count.toLocaleString()} {t("data_rows")} · {d.columns.length} {t("data_columns")}
+                {fmtNum(d.row_count)} {t(d.row_count === 1 ? "data_row_one" : "data_rows")} · {d.columns.length} {t("data_columns")}
                 {d.linked ? ` · ${t("data_linked")}` : ""}
               </span>
             </button>
@@ -332,7 +332,7 @@ function DatasetPanel({ detail, t }: { detail: DatasetDetail; t: T }) {
         <div className="card-head">
           <h3 className="card-title">{detail.name}</h3>
           <div className="chips">
-            <span className="chip"><strong>{detail.row_count.toLocaleString()}</strong> {t("data_rows")}</span>
+            <span className="chip"><strong>{fmtNum(detail.row_count)}</strong> {t(detail.row_count === 1 ? "data_row_one" : "data_rows")}</span>
             <span className="chip"><strong>{detail.columns.length}</strong> {t("data_columns")}</span>
             <span className="chip">{detail.kind}</span>
           </div>
@@ -361,7 +361,7 @@ function DatasetPanel({ detail, t }: { detail: DatasetDetail; t: T }) {
                     <td><strong>{c.name}</strong></td>
                     <td className="mono faint">{c.type}</td>
                     <td className="num">{p ? `${fmtNum(p.nulls_pct)}%` : "–"}</td>
-                    <td className="num">{p ? p.distinct_approx.toLocaleString() : "–"}</td>
+                    <td className="num">{p ? fmtNum(p.distinct_approx) : "–"}</td>
                     <td className="mono" style={{ fontSize: 12 }}>
                       {p && p.min !== undefined ? `${fmt(p.min)} – ${fmt(p.max)}` : "–"}
                     </td>
@@ -404,7 +404,7 @@ function DatasetPanel({ detail, t }: { detail: DatasetDetail; t: T }) {
           <span className="grow" />
           {result && (
             <span className="faint">
-              {t("data_rows_of").replace("{n}", result.row_count.toLocaleString()).replace("{total}", total.toLocaleString())}
+              {t("data_rows_of").replace("{n}", fmtNum(result.row_count)).replace("{total}", fmtNum(total))}
               {" · "}{fmtNum(result.elapsed_ms, 3)} ms
             </span>
           )}

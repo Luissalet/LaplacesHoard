@@ -42,6 +42,55 @@ def _resolve_column(catalog: Catalog, dataset: str, column: str, where: Optional
     return _floats([row[column] for row in result["rows"]], f"column {column!r}")
 
 
+def _resolve_paired(
+    catalog: Catalog, dataset: str, column: str, column2: str, where: Optional[str] = None
+) -> tuple[list[float], list[float]]:
+    """Like `_resolve_column` but for two columns at once, dropping a row
+    when EITHER is NULL - not each column's NULLs independently, which used
+    to leave two same-test samples of different lengths (e.g. "got 411 and
+    406") purely because the NULLs happened to fall on different rows."""
+    c1, c2 = _quote_ident(column), _quote_ident(column2)
+    sql = f"SELECT {c1} AS a, {c2} AS b FROM {_quote_ident(dataset)} WHERE {c1} IS NOT NULL AND {c2} IS NOT NULL"
+    if where:
+        _validate_where(where)
+        sql += f" AND ({where})"
+    result = catalog.query_all(sql)
+    d1: list[float] = []
+    d2: list[float] = []
+    for row in result["rows"]:
+        try:
+            a, b = float(row["a"]), float(row["b"])
+        except (TypeError, ValueError) as exc:
+            raise StatsError(f"columns {column!r}/{column2!r} must contain only numbers") from exc
+        if a == a and b == b:  # skip NaN (float('nan') != float('nan'))
+            d1.append(a)
+            d2.append(b)
+    return d1, d2
+
+
+def _get_data_pair(
+    data: Optional[list[float]],
+    data2: Optional[list[float]],
+    catalog: Optional[Catalog],
+    dataset: Optional[str],
+    column: Optional[str],
+    column2: Optional[str],
+    where: Optional[str],
+) -> tuple[list[float], list[float]]:
+    """Resolve two same-length samples for a paired/bivariate test.
+
+    Inline `data`/`data2` are trusted as already paired (the caller sent
+    them in matching order); a dataset's two columns are paired by row in
+    the same query, so a NULL in either drops that row from both sides."""
+    if data is not None or data2 is not None:
+        return _floats(data or [], "data"), _floats(data2 or [], "data2")
+    if dataset and column and column2:
+        if catalog is None:
+            raise StatsError("dataset/column given but no data catalog is available")
+        return _resolve_paired(catalog, dataset, column, column2, where)
+    raise StatsError("provide either inline data/data2 or dataset+column+column2")
+
+
 def _resolve_grouped(catalog: Catalog, dataset: str, column: str, group_by: str, where: Optional[str] = None):
     safe_col = _quote_ident(column)
     safe_group = _quote_ident(group_by)
@@ -242,8 +291,7 @@ def _run(
         }
 
     if test == "ttest_rel":
-        d1 = _get_data(data, catalog, dataset, column, where)
-        d2 = _get_data(data2, catalog, dataset, column2, where)
+        d1, d2 = _get_data_pair(data, data2, catalog, dataset, column, column2, where)
         if len(d1) != len(d2):
             raise StatsError("paired t-test needs equal-length samples")
         res = sp.ttest_rel(d1, d2)
@@ -254,9 +302,12 @@ def _run(
         }
 
     if test == "wilcoxon":
-        d1 = _get_data(data, catalog, dataset, column, where)
         one_sample = data2 is None and not column2
-        d2 = None if one_sample else _get_data(data2, catalog, dataset, column2, where)
+        if one_sample:
+            d1 = _get_data(data, catalog, dataset, column, where)
+            d2 = None
+        else:
+            d1, d2 = _get_data_pair(data, data2, catalog, dataset, column, column2, where)
         if d2 is not None and len(d1) != len(d2):
             raise StatsError("wilcoxon on two samples needs paired, equal-length samples")
         res = sp.wilcoxon([v - mu for v in d1]) if one_sample else sp.wilcoxon(d1, d2)
@@ -288,8 +339,7 @@ def _run(
         }
 
     if test in ("pearson", "spearman", "linregress"):
-        d1 = _get_data(data, catalog, dataset, column, where)
-        d2 = _get_data(data2, catalog, dataset, column2, where)
+        d1, d2 = _get_data_pair(data, data2, catalog, dataset, column, column2, where)
         if len(d1) != len(d2):
             raise StatsError(f"{test} needs two equal-length samples (x in data/column, y in data2/column2); got {len(d1)} and {len(d2)}")
         _need(d1, 3, test)
