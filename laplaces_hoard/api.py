@@ -14,6 +14,7 @@ import logging
 import re
 import threading
 import time
+from contextlib import asynccontextmanager
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any, Optional, Union
@@ -25,7 +26,9 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from pydantic import BaseModel, Field
 
+from . import backend as backend_mod
 from . import db
+from .engines import ask as ask_engine
 from .engines import calc, charts, dates, sandbox, stats, symbolic, units
 from .engines.calc import CalcError
 from .engines.data import Catalog, DataError, SQLGateError
@@ -35,6 +38,7 @@ from .engines.symbolic import SymbolicError
 from .engines.units import UnitsError
 from .engines.dates import DateError
 from .engines.charts import ChartError
+from .hoard_link import Link
 from .security import BrowserGuardMiddleware
 
 __version__ = "0.1.0"
@@ -101,10 +105,13 @@ def _dataset_brief(d: dict) -> dict:
 
 
 class AppState:
-    def __init__(self, data_dir: Path):
+    def __init__(self, data_dir: Path, link: Optional[Link] = None):
         self.data_dir = data_dir
         self.conn = db.connect(data_dir)
         self.catalog = Catalog(data_dir)
+        # One Link per app, closed on shutdown; injectable in tests (a fake
+        # Link or one backed by httpx.MockTransport) so tests stay offline.
+        self.link = link if link is not None else backend_mod.load_link(data_dir)
 
 
 # ---------------------------------------------------------------------- #
@@ -223,16 +230,34 @@ class CellBody(BaseModel):
     input: str
 
 
-def create_app(data_dir: Path, static_dir: Optional[Path] = None, port: int = 8812) -> FastAPI:
+class BackendConfigBody(BaseModel):
+    faustus_url: Optional[str] = None
+    faustus_token: Optional[str] = None
+    only_resident: Optional[bool] = None
+    capabilities: Optional[dict[str, dict[str, Any]]] = None
+
+
+class AskBody(BaseModel):
+    question: str
+    datasets: list[str] = Field(default_factory=list)
+
+
+def create_app(data_dir: Path, static_dir: Optional[Path] = None, port: int = 8812, link: Optional[Link] = None) -> FastAPI:
     data_dir = Path(data_dir)
     data_dir.mkdir(parents=True, exist_ok=True)
-    state = AppState(data_dir)
+    state = AppState(data_dir, link=link)
 
     _setup_logging(data_dir)
     # start the computation worker now (SymPy/Pint imports take seconds on
     # Windows) so the model's first calc call does not pay for it
     threading.Thread(target=sandbox.warm_up, name="laplace-warmup", daemon=True).start()
-    app = FastAPI(title=DISPLAY_NAME, version=__version__)
+
+    @asynccontextmanager
+    async def _lifespan(_app: FastAPI):
+        yield
+        await state.link.aclose()
+
+    app = FastAPI(title=DISPLAY_NAME, version=__version__, lifespan=_lifespan)
     app.add_middleware(BrowserGuardMiddleware, port=port)
     app.state.lh = state
 
@@ -298,6 +323,46 @@ def create_app(data_dir: Path, static_dir: Optional[Path] = None, port: int = 88
     def ui(engine: str, operation: str, input_data: Any, fn):
         return _record(engine, operation, input_data, "ui", fn)
 
+    async def _arecord(engine: str, operation: str, input_data: Any, source: str, fn):
+        """Async twin of `_record`, for the one feature (`ask`) whose engine call must be awaited."""
+        start = time.monotonic()
+        try:
+            output = await fn()
+        except _ENGINE_ERRORS as exc:
+            elapsed = (time.monotonic() - start) * 1000
+            db.log_computation(
+                state.conn, engine=engine, operation=operation, input_data=input_data,
+                output_data=None, ok=False, error=str(exc), elapsed_ms=elapsed, source=source,
+            )
+            log.info("%s %s.%s error %s", source, engine, operation, _error_code(exc))
+            raise HTTPException(status_code=400, detail={"error": _error_code(exc), "message": str(exc)}) from exc
+        except HTTPException:
+            raise
+        except Exception as exc:  # noqa: BLE001 - an engine bug must still answer in JSON and be logged
+            elapsed = (time.monotonic() - start) * 1000
+            message = f"{type(exc).__name__}: {exc}"[:500]
+            db.log_computation(
+                state.conn, engine=engine, operation=operation, input_data=input_data,
+                output_data=None, ok=False, error=message, elapsed_ms=elapsed, source=source,
+            )
+            log.exception("%s %s.%s failed unexpectedly", source, engine, operation)
+            raise HTTPException(
+                status_code=500,
+                detail={"error": "internal_error", "message": f"unexpected failure in {engine}.{operation}: {message}"},
+            ) from exc
+        elapsed = (time.monotonic() - start) * 1000
+        chart_path = output.get("_chart_path") if isinstance(output, dict) else None
+        extra = output.get("_response_extra", {}) if isinstance(output, dict) else {}
+        loggable = {k: v for k, v in output.items() if not k.startswith("_")} if isinstance(output, dict) else output
+        cid = db.log_computation(
+            state.conn, engine=engine, operation=operation, input_data=input_data,
+            output_data=loggable, ok=True, error=None, elapsed_ms=elapsed, source=source,
+            chart_path=chart_path,
+        )
+        if isinstance(output, dict):
+            return {"id": cid, "cite": f"[{cid}]", **loggable, **extra}
+        return {"id": cid, "cite": f"[{cid}]", "result": output}
+
     # ------------------------------------------------------------------ #
     # health
     # ------------------------------------------------------------------ #
@@ -314,6 +379,44 @@ def create_app(data_dir: Path, static_dir: Optional[Path] = None, port: int = 88
             "computations_logged": n_computations,
             "datasets_registered": n_datasets,
         }
+
+    # ------------------------------------------------------------------ #
+    # shared model backend (Hoard Link): Settings -> Models panel
+    # ------------------------------------------------------------------ #
+
+    @app.get("/api/backend")
+    async def get_backend():
+        status = await state.link.status()
+        return {
+            "capabilities": {cap: status[cap] for cap in backend_mod.USED_CAPABILITIES},
+            "config": {
+                "only_resident": state.link.config.only_resident,
+                "faustus_urls": list(state.link.config.faustus_urls),
+                "token_set": backend_mod.token_set(state.data_dir),
+            },
+            "app": backend_mod.app_backends(),
+        }
+
+    @app.put("/api/backend/config")
+    async def put_backend_config(body: BackendConfigBody):
+        backend_mod.save_config(
+            state.data_dir, faustus_url=body.faustus_url, faustus_token=body.faustus_token,
+            only_resident=body.only_resident, capabilities=body.capabilities,
+        )
+        # rebuild the Link so the new config applies immediately, without restarting the app
+        old_link = state.link
+        state.link = backend_mod.load_link(state.data_dir)
+        await old_link.aclose()
+        return {"ok": True, "token_set": backend_mod.token_set(state.data_dir)}
+
+    @app.post("/api/backend/recheck")
+    async def recheck_backend():
+        # a fresh Link has an empty probe cache, which is what "re-check now" means
+        old_link = state.link
+        state.link = backend_mod.load_link(state.data_dir)
+        await old_link.aclose()
+        status = await state.link.status()
+        return {cap: status[cap] for cap in backend_mod.USED_CAPABILITIES}
 
     # ------------------------------------------------------------------ #
     # tool operations: POST /api/agent/<tool> (the MCP adapter, logged as
@@ -482,6 +585,13 @@ def create_app(data_dir: Path, static_dir: Optional[Path] = None, port: int = 88
         # BOM so Excel on Windows opens UTF-8 (accents) correctly
         return Response("\ufeff" + buf.getvalue(), media_type="text/csv; charset=utf-8",
                         headers={"Content-Disposition": 'attachment; filename="query.csv"'})
+
+    @app.post("/api/ui/data_ask", name="ui_data_ask")
+    async def ui_data_ask(body: AskBody):
+        """"Ask your data" (Data screen, UI only - the agent already writes SQL itself via data_query)."""
+        async def _run():
+            return await ask_engine.ask(state.catalog, state.link, body.question, body.datasets)
+        return await _arecord("data", "ask", body.model_dump(exclude_defaults=True), "ui", _run)
 
     @app.get("/api/datasets")
     def list_datasets():
