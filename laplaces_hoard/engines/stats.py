@@ -37,7 +37,7 @@ def _resolve_column(catalog: Catalog, dataset: str, column: str, where: Optional
     if where:
         _validate_where(where)
         sql += f" AND ({where})"
-    result = catalog.query(sql, limit=1_000_000)
+    result = catalog.query_all(sql)
     return [float(row[column]) for row in result["rows"] if row[column] is not None]
 
 
@@ -48,7 +48,7 @@ def _resolve_grouped(catalog: Catalog, dataset: str, column: str, group_by: str,
     if where:
         _validate_where(where)
         sql += f" AND ({where})"
-    result = catalog.query(sql, limit=1_000_000)
+    result = catalog.query_all(sql)
     groups: dict[str, list[float]] = {}
     for row in result["rows"]:
         groups.setdefault(str(row["grp"]), []).append(float(row["val"]))

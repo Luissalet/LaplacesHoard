@@ -12,6 +12,7 @@ import random
 from datetime import date, timedelta
 from pathlib import Path
 
+import duckdb
 import openpyxl
 
 from . import db
@@ -38,7 +39,7 @@ def _generate_sales_csv(path: Path, n: int = 5000) -> None:
             writer.writerow([d.isoformat(), region, product, qty, price, round(qty * price, 2)])
 
 
-def _generate_sensor_parquet(path: Path, catalog_conn, n: int = 2000) -> None:
+def _generate_sensor_parquet(path: Path, n: int = 2000) -> None:
     rng = random.Random(20260202)
     csv_path = path.with_suffix(".tmp.csv")
     start = date(2026, 1, 1)
@@ -51,9 +52,13 @@ def _generate_sensor_parquet(path: Path, catalog_conn, n: int = 2000) -> None:
             temp = round(18 + 6 * rng.random() + (2 if 6 <= (i % 24) <= 18 else -2), 2)
             humidity = round(30 + 50 * rng.random(), 1)
             writer.writerow([ts.isoformat(), sensor, temp, humidity])
-    catalog_conn.execute(
-        f"COPY (SELECT * FROM read_csv_auto('{csv_path}')) TO '{path}' (FORMAT PARQUET)"
-    )
+    scratch = duckdb.connect()  # in-memory: never touches the catalogue file
+    try:
+        src = str(csv_path).replace("'", "''")
+        dst = str(path).replace("'", "''")
+        scratch.execute(f"COPY (SELECT * FROM read_csv_auto('{src}')) TO '{dst}' (FORMAT PARQUET)")
+    finally:
+        scratch.close()
     csv_path.unlink(missing_ok=True)
 
 
@@ -89,7 +94,7 @@ def seed_demo_data(app_data_dir: Path, files_dir: Path) -> None:
     if not sales_csv.exists():
         _generate_sales_csv(sales_csv)
     if not sensors_parquet.exists():
-        _generate_sensor_parquet(sensors_parquet, catalog._conn)
+        _generate_sensor_parquet(sensors_parquet)
     if not workbook_xlsx.exists():
         _generate_workbook(workbook_xlsx)
 
@@ -124,7 +129,6 @@ def seed_demo_data(app_data_dir: Path, files_dir: Path) -> None:
     q = "SELECT region, ROUND(SUM(amount), 2) AS total FROM sales GROUP BY region ORDER BY total DESC"
     log("data", "query", {"sql": q, "limit": 50}, lambda: catalog.query(q, 50), source="agent")
 
-    db.add_cell(conn, engine="calc", input_text="pct_change(2500, 3120)")
     c2 = db.add_cell(conn, engine="calc", input_text="pct_change(2500, 3120)")
     db.update_cell(conn, c2["id"], result=calc.compute("pct_change(2500, 3120)"))
     c3 = db.add_cell(conn, engine="math", input_text="factor(x**3 - x)")
@@ -132,4 +136,6 @@ def seed_demo_data(app_data_dir: Path, files_dir: Path) -> None:
     c4 = db.add_cell(conn, engine="units", input_text="5 ft 11 in -> cm")
     db.update_cell(conn, c4["id"], result=units.convert("5 ft 11 in", "cm"))
 
+    conn.close()
+    catalog.close()  # the app opens its own Catalog on the same file next
     marker.write_text(_MARKER, encoding="utf-8")

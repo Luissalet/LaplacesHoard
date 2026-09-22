@@ -56,7 +56,7 @@ def build_chart(
 ) -> dict[str, Any]:
     if kind not in _KIND_TO_MARK:
         raise ChartError(f"unknown chart kind: {kind}; choose one of {sorted(_KIND_TO_MARK)}")
-    result = catalog.query(sql, limit=MAX_CHART_ROWS)
+    result = catalog.query_all(sql, max_rows=MAX_CHART_ROWS)
     if result["row_count"] == 0:
         raise ChartError("query returned no rows to chart")
     columns = result["columns"]
