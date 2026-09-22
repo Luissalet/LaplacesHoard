@@ -163,13 +163,36 @@ def test_agent_chart_result_is_compact_and_log_stays_valid(client, sample_csv):
     body = {"sql": "SELECT region, SUM(amount) AS total FROM sample GROUP BY region", "kind": "bar",
             "x": "region", "y": "total"}
     agent = client.post("/api/agent/data_chart", json=body).json()
-    assert "spec" not in agent and agent["png_base64"]
+    # no image unless asked: an unrequested image can crash a text-only model
+    assert "spec" not in agent and "png_base64" not in agent
     assert agent["spec_summary"]["encoding"] == {"x": "region", "y": "total"}
+    with_image = client.post("/api/agent/data_chart", json={**body, "include_image": True}).json()
+    assert with_image["png_base64"]
     ui = client.post("/api/ui/data_chart", json=body).json()
     assert ui["spec"]["data"]["values"]
+    assert "png_base64" not in ui  # the UI renders the spec, it never needed the PNG either
     logged = client.get(f"/api/log/{agent['id']}").json()
     assert logged["output"] is not None and "png_base64" not in logged["output"]
     assert logged["chart_path"].endswith(".png")
+
+
+def test_chart_image_is_servable_by_id_even_without_include_image(client, sample_csv):
+    # the Work log can show the chart a model made even when the model call
+    # itself did not ask for the image back
+    client.post("/api/agent/data_register", json={"path": str(sample_csv), "name": "sample"})
+    body = {"sql": "SELECT region, SUM(amount) AS total FROM sample GROUP BY region", "kind": "bar",
+            "x": "region", "y": "total"}
+    agent = client.post("/api/agent/data_chart", json=body).json()
+    resp = client.get(f"/api/charts/{agent['id']}")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "image/png"
+    assert resp.content[:8] == b"\x89PNG\r\n\x1a\n"
+
+    missing = client.get("/api/charts/L-999999")
+    assert missing.status_code == 404
+
+    non_chart = client.post("/api/agent/calc", json={"expression": "1+1"}).json()
+    assert client.get(f"/api/charts/{non_chart['id']}").status_code == 404
 
 
 def test_data_list_for_the_agent_is_compact(client, sample_csv):

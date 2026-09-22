@@ -74,19 +74,59 @@ async def test_mcp_lists_all_tools_and_calls_calc_and_data_query(live_app):
             assert bad.isError
             assert "sql_gate" in bad.content[0].text
 
-            # the chart comes back as an image, and the text part stays small
+            # by default no image comes back at all (an unrequested image can
+            # crash a text-only local model); only a small JSON summary,
+            # pointing at the Work log entry that does hold the chart
             chart = await session.call_tool(
                 "data_chart", {"sql": "SELECT * FROM tiny", "kind": "bar", "x": "id", "y": "value"}
             )
             assert not chart.isError, chart.content
             kinds = [c.type for c in chart.content]
-            assert kinds == ["text", "image"]
+            assert kinds == ["text"]
             assert len(chart.content[0].text) < 1000
             assert "png_base64" not in chart.content[0].text
+            assert '"cite"' in chart.content[0].text
+
+            # include_image=true still returns it, for a model that can see images
+            chart2 = await session.call_tool(
+                "data_chart",
+                {"sql": "SELECT * FROM tiny", "kind": "bar", "x": "id", "y": "value", "include_image": True},
+            )
+            assert not chart2.isError, chart2.content
+            assert [c.type for c in chart2.content] == ["text", "image"]
 
             log = await session.call_tool("work_log", {"limit": 3})
             assert not log.isError
             assert '"cite"' in log.content[0].text
+
+
+@pytest.mark.asyncio
+async def test_mcp_stats_accepts_a_2d_contingency_table(live_app):
+    # the schema used to declare `data: list[float]`, which a real MCP
+    # client rejects for a nested table even though the description asks
+    # for one ("data = table, e.g. [[8, 2], [1, 9]]")
+    from mcp import ClientSession, StdioServerParameters
+    from mcp.client.stdio import stdio_client
+
+    params = StdioServerParameters(
+        command=sys.executable,
+        args=[str(MCP_SERVER_PATH)],
+        env={**os.environ, "LAPLACE_URL": live_app.base_url},
+    )
+    async with stdio_client(params) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            result = await session.call_tool(
+                "stats", {"test": "fisher_exact", "data": [[8, 2], [1, 9]]}
+            )
+            assert not result.isError, result.content
+            assert "odds_ratio" in result.content[0].text
+
+            result2 = await session.call_tool(
+                "stats", {"test": "chi2_contingency", "data": [[10, 20], [15, 25]]}
+            )
+            assert not result2.isError, result2.content
+            assert "p_value" in result2.content[0].text
 
 
 @pytest.mark.asyncio

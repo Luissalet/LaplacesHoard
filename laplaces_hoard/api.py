@@ -225,6 +225,7 @@ class DataChartBody(BaseModel):
     y: Optional[str] = None
     color: Optional[str] = None
     title: Optional[str] = None
+    include_image: bool = False
 
 
 class WorkLogQuery(BaseModel):
@@ -483,9 +484,15 @@ def create_app(
             state.catalog, body.sql, body.kind, body.x, body.y, body.color, body.title, out_path=out_path
         )
         spec = result["spec"]
-        extra: dict[str, Any] = {"png_base64": base64.b64encode(result["png_bytes"]).decode("ascii")}
+        # The PNG is always rendered and saved (so the Work log can show it
+        # later, from any source), but only base64-attached to the response
+        # when actually requested: an unrequested image in a tool result can
+        # crash a text-only local model mid-turn.
+        extra: dict[str, Any] = {}
+        if body.include_image:
+            extra["png_base64"] = base64.b64encode(result["png_bytes"]).decode("ascii")
         if include_spec:
-            extra["spec"] = spec  # the UI re-renders it interactively; the model gets the image
+            extra["spec"] = spec  # the UI re-renders it interactively
         return {
             "kind": body.kind,
             "spec_summary": {
@@ -534,6 +541,22 @@ def create_app(
         if item is None:
             raise HTTPException(status_code=404, detail={"error": "not_found", "message": f"no computation {cid}"})
         return item
+
+    @app.get("/api/charts/{cid}")
+    def get_chart_image(cid: str):
+        """The PNG a data_chart call saved, so the Work log can show it even
+        when the call itself did not request the image (see data_chart's
+        include_image)."""
+        item = db.get_computation(state.conn, cid)
+        chart_path = item.get("chart_path") if item else None
+        if not chart_path:
+            raise HTTPException(status_code=404, detail={"error": "not_found", "message": f"no chart for {cid}"})
+        path = Path(chart_path)
+        if not path.is_file():
+            raise HTTPException(
+                status_code=404, detail={"error": "not_found", "message": "the chart image file is missing"}
+            )
+        return FileResponse(path, media_type="image/png")
 
     @app.post("/api/log/{cid}/rerun")
     def rerun_log_item(cid: str):

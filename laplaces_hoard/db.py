@@ -183,6 +183,10 @@ def brief(item: dict, full: bool = False) -> dict:
         out["result"] = _clip(item.get("output"), n_out)
     else:
         out["error"] = _clip(item.get("error"), 300)
+    if item.get("chart_path"):
+        # a small flag, never the path itself (that is a local filesystem
+        # detail); the image is fetched by id through /api/charts/<id>
+        out["has_chart"] = True
     return out
 
 

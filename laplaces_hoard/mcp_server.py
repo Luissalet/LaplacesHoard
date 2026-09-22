@@ -220,7 +220,7 @@ def units_convert(quantity: str, to: str) -> dict:
 @mcp.tool(annotations=_RO)
 def stats(
     test: str,
-    data: Optional[list[float]] = None,
+    data: Optional[Union[list[float], list[list[float]]]] = None,
     data2: Optional[list[float]] = None,
     dataset: Optional[str] = None,
     column: Optional[str] = None,
@@ -398,26 +398,46 @@ def data_query(sql: str, limit: int = 50) -> dict:
 
 
 @mcp.tool(annotations=_RO)
-def data_chart(sql: str, kind: str, x: str, y: Optional[str] = None, color: Optional[str] = None, title: Optional[str] = None) -> list:
-    """Draw a chart from a read-only SQL query and return it as a PNG image.
+def data_chart(
+    sql: str, kind: str, x: str, y: Optional[str] = None, color: Optional[str] = None,
+    title: Optional[str] = None, include_image: bool = False,
+) -> list:
+    """Draw a chart from a read-only SQL query and save it; only returns the image if you ask.
 
     kind: bar, line, area, scatter, histogram (x only), pie (x = category,
     y = value), heatmap (x and y). x, y and color are column names of the
     query result, so aggregate in SQL first, e.g.
     sql="SELECT region, SUM(amount) AS total FROM sales GROUP BY region",
     kind="bar", x="region", y="total". bar/line/area without y count rows.
-    Uses at most 5000 rows. Returns a short JSON summary (id, cite,
-    row_count, encoding) followed by the image.
+    Uses at most 5000 rows.
+
+    The chart is always saved and logged with its own id, visible in the
+    app's Work log (its detail view shows the image). `include_image`
+    defaults to false and returns only a short JSON summary (id, cite,
+    row_count, encoding) - a text-only model must not receive an unrequested
+    image, it can crash the turn. Only set include_image=true when you can
+    see images and actually need to look at this one; otherwise just tell
+    the person to check [id] in the app, or call this again with
+    include_image=true if you need to read values off the chart yourself.
 
     Keywords: chart, plot, graph, bar chart, line chart, histogram, pie
     chart, visualize, gráfico, gráfica, gráfico de barras, gráfico de
     líneas, histograma, gráfico circular, visualizar.
     """
-    result = _call("data_chart", _compact({"sql": sql, "kind": kind, "x": x, "y": y, "color": color, "title": title}))
+    result = _call("data_chart", _compact({
+        "sql": sql, "kind": kind, "x": x, "y": y, "color": color, "title": title,
+        "include_image": include_image,
+    }))
     png_b64 = result.pop("png_base64", "")
     result.pop("spec", None)
+    if not include_image:
+        result["image"] = (
+            "not included (this call did not set include_image=true); the chart was still saved - "
+            f"see it in the app's Work log entry {result.get('cite', '')}, or call data_chart again "
+            "with include_image=true if you need to read values off it yourself"
+        )
     content: list[Any] = [TextContent(type="text", text=json.dumps(result, ensure_ascii=False))]
-    if png_b64:
+    if png_b64 and include_image:
         content.append(ImageContent(type="image", data=png_b64, mimeType="image/png"))
     return content
 

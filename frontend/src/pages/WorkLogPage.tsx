@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { RotateCw, Search, X } from "lucide-react";
+import { BarChart3, RotateCw, Search, X } from "lucide-react";
 import { api, type LogItem } from "../api";
 import type { DictKey } from "../i18n";
 import { CiteBadge, copyCite } from "../components/ResultView";
@@ -70,7 +70,14 @@ export function WorkLogPage({ t }: { t: (k: DictKey) => string }) {
                   <tr key={it.id} style={{ cursor: "pointer" }} onClick={() => setSelected(it)}>
                     <td className="mono">{it.id}</td>
                     <td>{it.engine}</td>
-                    <td className="mono">{it.operation}</td>
+                    <td className="mono">
+                      {it.operation}
+                      {it.chart_path && (
+                        <span title={t("log_chart")}>
+                          <BarChart3 size={12} className="faint" style={{ marginLeft: 6, verticalAlign: -1 }} />
+                        </span>
+                      )}
+                    </td>
                     <td><span className={`badge ${it.source === "agent" ? "badge-ok" : "badge-muted"}`}>{it.source === "agent" ? t("log_source_agent") : t("log_source_ui")}</span></td>
                     <td>{it.ok ? <span className="badge badge-ok">ok</span> : <span className="badge badge-error">error</span>}</td>
                     <td className="num">{it.elapsed_ms.toFixed(1)}</td>
@@ -124,6 +131,16 @@ function DetailModal({ item, onClose, t, onRerun }: { item: LogItem; onClose: ()
         <pre className="mono result-block" style={{ whiteSpace: "pre-wrap" }}>
           {item.ok ? JSON.stringify(item.output, null, 2) : item.error}
         </pre>
+        {item.chart_path && (
+          <>
+            <div className="faint" style={{ margin: "10px 0 4px" }}>{t("log_chart")}</div>
+            <img
+              src={`/api/charts/${item.id}`}
+              alt={t("log_chart")}
+              style={{ maxWidth: "100%", borderRadius: 6, border: "1px solid var(--border)" }}
+            />
+          </>
+        )}
         <div className="row" style={{ marginTop: 12 }}>
           <button className="btn" onClick={() => onRerun(item.id)}>{t("common_rerun")}</button>
         </div>
