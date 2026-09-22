@@ -66,6 +66,13 @@ def main() -> None:
         page.wait_for_selector(".chart-frame canvas, .chart-frame svg", timeout=15000)
         time.sleep(1.0)
         page.evaluate("document.querySelector('.main').scrollTo(0, 0)")
+        # The dataset's source path is absolute and machine-specific; show it
+        # relative to a neutral checkout folder instead.
+        page.evaluate(r"""() => {
+            for (const el of document.querySelectorAll('.mono[title]')) {
+                el.textContent = el.textContent.replace(/^.*(?=[\\/]data-demo[\\/])/, '~/LaplacesHoard');
+            }
+        }""")
         shoot(page, "data.png")
         page.evaluate("document.querySelector('.main').scrollTo(0, 100000)")
         time.sleep(0.4)
