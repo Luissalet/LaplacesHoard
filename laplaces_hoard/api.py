@@ -167,7 +167,8 @@ class DateCalcBody(BaseModel):
     months: int = 0
     years: int = 0
     country: str = "ES"
-    subdivision: Optional[str] = "MD"
+    subdivision: Optional[str] = None  # ES without a subdivision means Madrid (MD)
+    include_end: bool = True
     birth_date: Optional[str] = None
     on: Optional[str] = None
     from_tz: Optional[str] = None
@@ -491,22 +492,28 @@ def create_app(data_dir: Path, static_dir: Optional[Path] = None, port: int = 88
 
     def _dispatch_date_dict(operation: str, d: dict) -> dict:
         if operation == "diff":
-            return dates.diff(d["start"], d["end"], d.get("unit", "days"))
+            return dates.diff(d.get("start"), d.get("end"), d.get("unit") or "days")
         if operation == "add":
-            return dates.add(d["start"], days=d.get("days", 0), weeks=d.get("weeks", 0), months=d.get("months", 0), years=d.get("years", 0))
+            return dates.add(d.get("start"), days=d.get("days") or 0, weeks=d.get("weeks") or 0,
+                             months=d.get("months") or 0, years=d.get("years") or 0)
         if operation == "business_days":
-            return dates.business_days(d["start"], d["end"], country=d.get("country", "ES"), subdivision=d.get("subdivision", "MD"))
+            return dates.business_days(
+                d.get("start"), d.get("end"), country=d.get("country") or "ES",
+                subdivision=d.get("subdivision"), include_end=d.get("include_end", True),
+            )
         if operation == "weekday":
-            return dates.weekday(d["value"])
+            return dates.weekday(d.get("value") or d.get("start"))
         if operation == "iso_week":
-            return dates.iso_week(d["value"])
+            return dates.iso_week(d.get("value") or d.get("start"))
         if operation == "age":
-            return dates.age(d["birth_date"], on=d.get("on"))
+            return dates.age(d.get("birth_date") or d.get("start"), on=d.get("on") or d.get("end"))
         if operation == "convert_tz":
-            return dates.convert_tz(d["value"], from_tz=d["from_tz"], to_tz=d["to_tz"])
+            return dates.convert_tz(d.get("value") or d.get("start"), from_tz=d.get("from_tz"), to_tz=d.get("to_tz"))
         if operation == "parse":
-            return dates.parse(d.get("text") or d.get("value", ""))
-        raise DateError(f"unknown date operation: {operation}")
+            return dates.parse(d.get("text") or d.get("value") or "")
+        raise DateError(
+            f"unknown date operation: {operation}; choose diff, add, business_days, weekday, iso_week, age, convert_tz or parse"
+        )
 
     def _rerun_units(operation: str, input_data: dict) -> dict:
         if operation == "check":
