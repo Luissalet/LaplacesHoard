@@ -10,3 +10,4 @@ frontend/dist/
 .env
 test-results/
 .DS_Store
+data-uxtest/
