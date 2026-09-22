@@ -198,3 +198,32 @@ def test_oversized_log_output_is_stored_as_valid_json(data_dir):
                              elapsed_ms=1.0, source="ui")
     item = db.get_computation(conn, cid)
     assert item["output"]["truncated"] is True
+
+
+def test_csv_export_returns_the_whole_result(client, tmp_path):
+    import csv as _csv
+
+    path = tmp_path / "big.csv"
+    with path.open("w", newline="", encoding="utf-8") as fh:
+        w = _csv.writer(fh)
+        w.writerow(["n", "city"])
+        for i in range(1500):
+            w.writerow([i, "Málaga"])
+    client.post("/api/ui/data_register", json={"path": str(path)})
+    r = client.post("/api/export/csv", json={"sql": "SELECT * FROM big ORDER BY n"})
+    assert r.status_code == 200
+    text = r.content.decode("utf-8-sig")
+    lines = text.strip().split("\n")
+    assert lines[0] == "n,city" and len(lines) == 1501 and lines[-1] == "1499,Málaga"
+    bad = client.post("/api/export/csv", json={"sql": "COPY big TO 'x.csv'"})
+    assert bad.status_code == 400 and bad.json()["error"] == "sql_gate"
+
+
+def test_logged_inputs_skip_defaults_and_still_rerun(client):
+    s = client.post("/api/agent/stats", json={"test": "describe", "data": [1, 2, 3, 4]}).json()
+    d = client.post("/api/agent/date_calc", json={"operation": "business_days", "start": "2026-09-21",
+                                                 "end": "2026-09-25"}).json()
+    logged = client.get(f"/api/log/{d['id']}").json()["input"]
+    assert logged == {"operation": "business_days", "start": "2026-09-21", "end": "2026-09-25"}
+    assert client.post(f"/api/log/{s['id']}/rerun").json()["mean"] == 2.5
+    assert client.post(f"/api/log/{d['id']}/rerun").json()["business_days"] == 5

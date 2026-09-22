@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import csv
 import random
+import time
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -19,7 +20,7 @@ from . import db
 from .engines import calc, dates, symbolic, units
 from .engines.data import Catalog
 
-_MARKER = "SEEDED_V1"
+_MARKER = "SEEDED_V2"
 
 
 def _generate_sales_csv(path: Path, n: int = 5000) -> None:
@@ -104,37 +105,40 @@ def seed_demo_data(app_data_dir: Path, files_dir: Path) -> None:
 
     conn = db.connect(app_data_dir)
 
-    def log(engine, operation, input_data, fn, source="ui"):
+    def log(engine, operation, input_data, fn):
+        # real computations with their real timings; recorded as the human's
+        # own (UI) work. Assistant entries only ever come from real tool calls.
+        start = time.monotonic()
         result = fn()
-        db.log_computation(
+        cid = db.log_computation(
             conn, engine=engine, operation=operation, input_data=input_data,
-            output_data=result, ok=True, error=None, elapsed_ms=3.0, source=source,
+            output_data=result, ok=True, error=None,
+            elapsed_ms=(time.monotonic() - start) * 1000, source="ui",
         )
-        return result
+        return {"id": cid, "cite": f"[{cid}]", **result}
 
-    log("calc", "compute", {"expression": "pct(15, 2347)"}, lambda: calc.compute("pct(15, 2347)"), source="agent")
-    log("calc", "compute", {"expression": "sqrt(2) + pi"}, lambda: calc.compute("sqrt(2) + pi"))
-    log(
-        "math", "solve",
-        {"expressions": ["x**2 - 5*x + 6 == 0"], "variables": ["x"]},
-        lambda: symbolic.run("solve", expressions=["x**2 - 5*x + 6 == 0"], variables=["x"]),
-        source="agent",
-    )
-    log("units", "convert", {"quantity": "3.5 km/h", "to": "m/s"}, lambda: units.convert("3.5 km/h", "m/s"))
-    log(
-        "dates", "business_days",
-        {"start": "2026-05-01", "end": "2026-05-15", "country": "ES", "subdivision": "MD"},
-        lambda: dates.business_days("2026-05-01", "2026-05-15"),
-    )
+    def cell(engine, text, operation, input_data, fn):
+        c = db.add_cell(conn, engine=engine, input_text=text)
+        db.update_cell(conn, c["id"], result=log(engine, operation, input_data, fn))
+
+    cell("dates", "3 de abril de 2026", "parse", {"text": "3 de abril de 2026"},
+         lambda: dates.parse("3 de abril de 2026"))
+    cell("units", "100 degF -> degC", "convert", {"quantity": "100 degF", "to": "degC"},
+         lambda: units.convert("100 degF", "degC"))
+    cell("math", "integrate(x**2 * exp(-x), x, 0, oo)", "integrate",
+         {"operation": "integrate", "expression": "x**2 * exp(-x)", "variable": "x", "lower": "0", "upper": "oo"},
+         lambda: symbolic._execute("integrate", {"expression": "x**2 * exp(-x)", "variable": "x", "lower": "0", "upper": "oo"}))
+    cell("math", "x**2 - 5*x + 6 = 0", "solve", {"operation": "solve", "expressions": ["x**2 - 5*x + 6 = 0"]},
+         lambda: symbolic._execute("solve", {"expressions": ["x**2 - 5*x + 6 = 0"]}))
+    cell("calc", "(1.035^10 - 1) * 100", "compute", {"expression": "(1.035^10 - 1) * 100"},
+         lambda: calc.compute("(1.035^10 - 1) * 100"))
+    cell("calc", "pct(21, 1250)", "compute", {"expression": "pct(21, 1250)"},
+         lambda: calc.compute("pct(21, 1250)"))
+
+    log("dates", "business_days", {"start": "2026-04-27", "end": "2026-05-08", "country": "ES"},
+        lambda: dates.business_days("2026-04-27", "2026-05-08"))
     q = "SELECT region, ROUND(SUM(amount), 2) AS total FROM sales GROUP BY region ORDER BY total DESC"
-    log("data", "query", {"sql": q, "limit": 50}, lambda: catalog.query(q, 50), source="agent")
-
-    c2 = db.add_cell(conn, engine="calc", input_text="pct_change(2500, 3120)")
-    db.update_cell(conn, c2["id"], result=calc.compute("pct_change(2500, 3120)"))
-    c3 = db.add_cell(conn, engine="math", input_text="factor(x**3 - x)")
-    db.update_cell(conn, c3["id"], result=symbolic.run("factor", expression="x**3 - x"))
-    c4 = db.add_cell(conn, engine="units", input_text="5 ft 11 in -> cm")
-    db.update_cell(conn, c4["id"], result=units.convert("5 ft 11 in", "cm"))
+    log("data", "query", {"sql": q, "limit": 50}, lambda: catalog.query(q, 50))
 
     conn.close()
     catalog.close()  # the app opens its own Catalog on the same file next

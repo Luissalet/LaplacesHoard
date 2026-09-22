@@ -8,6 +8,8 @@ and serves the built frontend.
 from __future__ import annotations
 
 import base64
+import csv
+import io
 import logging
 import re
 import threading
@@ -18,7 +20,7 @@ from typing import Any, Optional, Union
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from pydantic import BaseModel, Field
@@ -325,7 +327,7 @@ def create_app(data_dir: Path, static_dir: Optional[Path] = None, port: int = 88
 
         @app.post(f"{prefix}/calc", name=f"{source}_calc")
         def tool_calc(body: CalcBody):
-            return rec("calc", "compute", body.model_dump(), lambda: _calc(body.expression, body.precision))
+            return rec("calc", "compute", body.model_dump(exclude_defaults=True), lambda: _calc(body.expression, body.precision))
 
         @app.post(f"{prefix}/math", name=f"{source}_math")
         def tool_math(body: MathBody):
@@ -334,7 +336,7 @@ def create_app(data_dir: Path, static_dir: Optional[Path] = None, port: int = 88
             timeout = payload.pop("timeout", 10.0)
             if "expressions" not in payload and "expression" in payload and op == "solve":
                 payload["expressions"] = [payload.pop("expression")]
-            return rec("math", op, body.model_dump(exclude_none=True), lambda: symbolic.run(op, timeout=timeout, **payload))
+            return rec("math", op, body.model_dump(exclude_defaults=True), lambda: symbolic.run(op, timeout=timeout, **payload))
 
         @app.post(f"{prefix}/units_convert", name=f"{source}_units_convert")
         def tool_units_convert(body: UnitsConvertBody):
@@ -344,12 +346,12 @@ def create_app(data_dir: Path, static_dir: Optional[Path] = None, port: int = 88
         @app.post(f"{prefix}/stats", name=f"{source}_stats")
         def tool_stats(body: StatsBody):
             payload = body.model_dump(exclude={"test"})
-            return rec("stats", body.test, body.model_dump(exclude_none=True),
+            return rec("stats", body.test, body.model_dump(exclude_defaults=True),
                        lambda: stats.run(body.test, catalog=state.catalog, **payload))
 
         @app.post(f"{prefix}/date_calc", name=f"{source}_date_calc")
         def tool_date_calc(body: DateCalcBody):
-            return rec("dates", body.operation, body.model_dump(exclude_none=True), lambda: _dispatch_date(body))
+            return rec("dates", body.operation, body.model_dump(exclude_defaults=True), lambda: _dispatch_date(body))
 
         @app.post(f"{prefix}/data_list", name=f"{source}_data_list")
         def tool_data_list():
@@ -366,11 +368,11 @@ def create_app(data_dir: Path, static_dir: Optional[Path] = None, port: int = 88
 
         @app.post(f"{prefix}/data_query", name=f"{source}_data_query")
         def tool_data_query(body: DataQueryBody):
-            return rec("data", "query", body.model_dump(), lambda: state.catalog.query(body.sql, body.limit))
+            return rec("data", "query", body.model_dump(exclude_defaults=True), lambda: state.catalog.query(body.sql, body.limit))
 
         @app.post(f"{prefix}/data_chart", name=f"{source}_data_chart")
         def tool_data_chart(body: DataChartBody):
-            return rec("data", "chart", body.model_dump(), lambda: _chart(body, include_spec=(source == "ui")))
+            return rec("data", "chart", body.model_dump(exclude_defaults=True), lambda: _chart(body, include_spec=(source == "ui")))
 
     def _chart(body: "DataChartBody", include_spec: bool) -> dict:
         out_path = state.data_dir / "charts" / f"chart_{time.time_ns()}.png"
@@ -459,6 +461,27 @@ def create_app(data_dir: Path, static_dir: Optional[Path] = None, port: int = 88
         else:
             raise HTTPException(status_code=400, detail={"error": "not_rerunnable", "message": f"engine {engine_name} cannot be re-run"})
         return ui(engine_name, item["operation"], input_data, fn)
+
+    @app.post("/api/export/csv")
+    def export_csv(body: DataQueryBody):
+        """The complete result of a gated read-only query as CSV (the UI grid shows at most 1000 rows)."""
+        holder: dict[str, Any] = {}
+
+        def _run():
+            r = state.catalog.query_all(body.sql, max_rows=1_000_000)
+            holder.update(r)
+            return {"row_count": r["row_count"], "truncated": r["truncated"]}
+
+        _record("data", "export_csv", {"sql": body.sql}, "ui", _run)
+        buf = io.StringIO()
+        names = [c["name"] for c in holder["columns"]]
+        writer = csv.writer(buf, lineterminator="\n")
+        writer.writerow(names)
+        for row in holder["rows"]:
+            writer.writerow(["" if row[n] is None else row[n] for n in names])
+        # BOM so Excel on Windows opens UTF-8 (accents) correctly
+        return Response("\ufeff" + buf.getvalue(), media_type="text/csv; charset=utf-8",
+                        headers={"Content-Disposition": 'attachment; filename="query.csv"'})
 
     @app.get("/api/datasets")
     def list_datasets():
