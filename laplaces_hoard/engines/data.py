@@ -150,8 +150,16 @@ def _first_lines(text: str, max_chars: int = 600) -> str:
     return text if len(text) <= max_chars else text[:max_chars] + "…"
 
 
-def _json_safe(value: Any, *, cap: Optional[int] = None) -> Any:
-    """Make a DuckDB value JSON-safe: decimals as strings, dates ISO, NaN as string."""
+def _json_safe(value: Any, *, cap: Optional[int] = None, list_cap: Optional[int] = None) -> Any:
+    """Make a DuckDB value JSON-safe: decimals as strings, dates ISO, NaN as string.
+
+    `cap` bounds every string (including a BLOB's hex text). `list_cap` bounds
+    how many elements of a nested LIST/STRUCT-array are kept, so one huge
+    nested value (a JSON export's array column, a wide BLOB) cannot blow up a
+    small sample or query result — pass it wherever the result is meant for a
+    model with a finite context (sample rows, public query results), and
+    leave it `None` for internal full-data reads (stats, charts).
+    """
     if value is None or isinstance(value, (bool, int)):
         return value
     if isinstance(value, float):
@@ -167,16 +175,35 @@ def _json_safe(value: Any, *, cap: Optional[int] = None) -> Any:
     if isinstance(value, UUID):
         return str(value)
     if isinstance(value, (bytes, bytearray)):
-        return value.hex()
+        text = value.hex()
+        if cap is not None and len(text) > cap:
+            return text[:cap] + "…"
+        return text
     if isinstance(value, str):
         if cap is not None and len(value) > cap:
             return value[:cap] + "…"
         return value
     if isinstance(value, dict):
-        return {str(k): _json_safe(v, cap=cap) for k, v in value.items()}
+        items = list(value.items())
+        if list_cap is not None and len(items) > list_cap:
+            out = {str(k): _json_safe(v, cap=cap, list_cap=list_cap) for k, v in items[:list_cap]}
+            out["…"] = f"{len(items) - list_cap} more field(s) omitted"
+            return out
+        return {str(k): _json_safe(v, cap=cap, list_cap=list_cap) for k, v in items}
     if isinstance(value, (list, tuple)):
-        return [_json_safe(v, cap=cap) for v in value]
+        if list_cap is not None and len(value) > list_cap:
+            return [_json_safe(v, cap=cap, list_cap=list_cap) for v in value[:list_cap]] + [
+                f"… {len(value) - list_cap} more item(s) omitted"
+            ]
+        return [_json_safe(v, cap=cap, list_cap=list_cap) for v in value]
     return str(value)
+
+
+# Cap on how many elements of a nested list/struct are kept in a sample row or
+# a public query result — a single JSON row with a large nested array (an
+# activity-log export, say) must not blow up to hundreds of thousands of
+# characters just to preview it.
+MAX_LIST_ITEMS = 20
 
 
 def _base_type(type_name: str) -> str:
@@ -387,14 +414,27 @@ class Catalog:
         row = conn.execute("SELECT name FROM _lh_datasets WHERE lower(name) = lower(?)", [name]).fetchone()
         return row[0] if row else None
 
-    def _materialize(self, view_name: str, select_sql: str, size: int, source: Path, kind: str, options: dict) -> dict:
+    def _materialize(
+        self, view_name: str, select_sql: str, size: int, source: Path, kind: str, options: dict,
+        *, locale_numeric: Optional[tuple[Optional[str], Optional[str]]] = None,
+    ) -> dict:
         """Create TABLE (materialized) or VIEW (linked, for big files), profile it, store metadata."""
         with self._writable() as conn:
             existing = self._existing_name(conn, view_name)
             if existing and existing != view_name:
                 view_name = existing  # DuckDB identifiers are case-insensitive: keep the stored spelling
-            conn.execute(f'DROP VIEW IF EXISTS "{view_name}"')
-            conn.execute(f'DROP TABLE IF EXISTS "{view_name}"')
+            # "IF EXISTS" only suppresses "doesn't exist" — DuckDB still raises
+            # if the object exists but is the *other* kind (e.g. dropping a VIEW
+            # that is actually a TABLE), which re-registering the same path hits
+            # every time it flips linked/materialized. Try both, ignore whichever
+            # doesn't apply.
+            for stmt in (f'DROP VIEW IF EXISTS "{view_name}"', f'DROP TABLE IF EXISTS "{view_name}"'):
+                try:
+                    conn.execute(stmt)
+                except duckdb.Error:
+                    pass
+            if locale_numeric is not None:
+                select_sql = _apply_locale_numbers(conn, select_sql, *locale_numeric)
             linked = size > LINK_THRESHOLD_BYTES
             kind_sql = "VIEW" if linked else "TABLE"
             conn.execute(f'CREATE {kind_sql} "{view_name}" AS {select_sql}')
@@ -422,13 +462,58 @@ class Catalog:
         view_name = slugify_name(name or p.stem)
         delim = options.get("delimiter")
         header = options.get("header", True)
-        args = [f"'{_esc(str(p))}'", f"header={str(bool(header)).lower()}"]
-        if delim:
-            args.append(f"delim='{_esc(str(delim))}'")
-        elif p.suffix.lower() == ".tsv":
-            args.append("delim='\\t'")
-        select_sql = f"SELECT * FROM read_csv_auto({', '.join(args)})"
-        return self._materialize(view_name, select_sql, p.stat().st_size, p, "csv", options)
+        encoding = options.get("encoding")
+        date_format = options.get("date_format")
+        decimal_sep = options.get("decimal_separator")
+        thousands_sep = options.get("thousands_separator")
+        if encoding and str(encoding).lower() not in _CSV_ENCODINGS:
+            raise DataError(
+                f"unsupported encoding: {encoding!r}; use one of utf-8, utf-16, latin-1 "
+                "(latin-1 also reads Windows-1252 files correctly for Spanish/French/German text)"
+            )
+
+        date_fmt = date_format or _sniff_dayfirst_format(p, delim, bool(header), str(encoding or "utf-8"))
+
+        def build_select(enc: Optional[str]) -> str:
+            args = [f"'{_esc(str(p))}'", f"header={str(bool(header)).lower()}"]
+            if delim:
+                args.append(f"delim='{_esc(str(delim))}'")
+            elif p.suffix.lower() == ".tsv":
+                args.append("delim='\\t'")
+            if enc:
+                args.append(f"encoding='{_esc(str(enc))}'")
+            if date_fmt:
+                args.append(f"dateformat='{_esc(date_fmt)}'")
+            return f"SELECT * FROM read_csv_auto({', '.join(args)})"
+
+        locale_numeric = (decimal_sep, thousands_sep) if (decimal_sep or thousands_sep) else None
+        size = p.stat().st_size
+        # No explicit encoding: try UTF-8 first, then the common Windows
+        # fallbacks, so a Windows-1252 export from a Spanish machine "just
+        # works" instead of failing with a confusing "try UTF-16" message.
+        candidates: list[Optional[str]] = [encoding] if encoding else [None, *_CSV_ENCODING_FALLBACKS]
+        last_exc: Optional[Exception] = None
+        for enc in candidates:
+            try:
+                result = self._materialize(
+                    view_name, build_select(enc), size, p, "csv",
+                    {**options, **({"encoding": enc} if enc else {})},
+                    locale_numeric=locale_numeric,
+                )
+            except duckdb.Error as exc:
+                if encoding or not _looks_like_encoding_error(exc):
+                    raise
+                last_exc = exc
+                continue
+            if enc and not encoding:
+                result["encoding_detected"] = enc
+            return result
+        raise DataError(
+            f"could not read {p.name}: it is not valid UTF-8, and reading it as latin-1 (the usual "
+            f"stand-in for a Windows-1252 export) did not work either; pass options.encoding "
+            f"explicitly, e.g. {{\"encoding\": \"latin-1\"}} or {{\"encoding\": \"utf-16\"}} "
+            f"({_first_lines(str(last_exc))})"
+        ) from last_exc
 
     def _register_parquet(self, p: Path, name: Optional[str], options: dict) -> dict:
         view_name = slugify_name(name or p.stem)
@@ -587,7 +672,8 @@ class Catalog:
             sample = conn.execute(f'SELECT * FROM "{name}" LIMIT 5').fetchall()
             col_names = [c["name"] for c in columns]
             sample_rows = [
-                {col_names[i]: _json_safe(v, cap=120) for i, v in enumerate(row)} for row in sample
+                {col_names[i]: _json_safe(v, cap=120, list_cap=MAX_LIST_ITEMS) for i, v in enumerate(row)}
+                for row in sample
             ]
             out = {
                 "name": name,
@@ -604,6 +690,16 @@ class Catalog:
             if stale:
                 out["stale"] = True
                 out["stale_hint"] = "the source file changed since registration; call data_register on it again"
+            nested = [
+                c["name"] for c in columns
+                if _base_type(c["type"]) in ("STRUCT", "MAP") or c["type"].upper().rstrip().endswith("[]")
+            ]
+            if nested and meta["row_count"] <= 5:
+                out["hint"] = (
+                    f"this dataset has only {meta['row_count']} row(s) with nested column(s) "
+                    f"{', '.join(nested)}; if it is really one record per exported item, expand it with "
+                    f"e.g. SELECT UNNEST({nested[0]}) FROM \"{name}\" in data_query"
+                )
             return out
 
     # -- query ---------------------------------------------------------------
@@ -664,8 +760,13 @@ class Catalog:
         truncated = len(rows) > limit
         rows = rows[:limit]
         col_names = [c["name"] for c in columns]
+        # cell_cap is only set on the public query() path (query_all(), used
+        # internally by stats/charts, passes None): cap nested list/struct
+        # values there too, for the same reason long text cells are capped.
+        list_cap = MAX_LIST_ITEMS if cell_cap is not None else None
         json_rows = [
-            {col_names[i]: _json_safe(v, cap=cell_cap) for i, v in enumerate(row)} for row in rows
+            {col_names[i]: _json_safe(v, cap=cell_cap, list_cap=list_cap) for i, v in enumerate(row)}
+            for row in rows
         ]
         return {
             "columns": columns,
@@ -736,3 +837,120 @@ def _profile(conn, view_name: str, columns: list[dict], total: int) -> dict:
 
 def _esc(text: str) -> str:
     return text.replace("'", "''")
+
+
+# -- CSV locale handling: encoding, day-first dates, decimal/thousands seps --
+
+# DuckDB's CSV reader only accepts these encoding names without an extra
+# extension (verified against duckdb 1.5.x) — and this catalogue never
+# auto-installs extensions (see the module docstring), so cp1252 itself is
+# not usable even though DuckDB's error message mentions it. 'latin-1' is
+# used as the practical stand-in for Windows-1252: they only differ in the
+# 0x80-0x9F range (curly quotes, em-dash, €...), and are identical for every
+# Spanish/French/German accented letter, which is what a "Windows-1252 CSV"
+# almost always means in practice.
+_CSV_ENCODINGS = {"utf-8", "utf8", "utf-16", "latin-1", "latin1"}
+_CSV_ENCODING_FALLBACKS = ("latin-1",)
+
+
+def _looks_like_encoding_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return "not utf-8 encoded" in text or "invalid unicode" in text
+
+
+_DATE_TOKEN_RE = re.compile(r"^(\d{1,2})([/-])(\d{1,2})\2(\d{2}|\d{4})$")
+
+
+def _sniff_dayfirst_format(p: Path, delimiter: Optional[str], header: bool, encoding: str = "utf-8") -> Optional[str]:
+    """Find unambiguous day-first evidence in a slash/dash-separated date
+    column, e.g. "13/02/25" (13 can only be a day) — DuckDB's own sniffer
+    otherwise reads it as 2013-02-25 (day and year swapped), silently.
+
+    Returns a `dateformat` string for `read_csv_auto` when a component > 12
+    is found in a consistent position across the sampled rows; returns
+    `None` (no override, DuckDB's own sniffer decides as before) when there
+    is no such evidence, or when it is contradictory (mixed formats in the
+    same file) — guessing wrong would be worse than not guessing.
+    """
+    sep_guess = delimiter or ("\t" if p.suffix.lower() == ".tsv" else ",")
+    dayfirst: Optional[bool] = None
+    sep = "/"
+    year_len4 = True
+    try:
+        with p.open("r", encoding=encoding, errors="replace", newline="") as fh:
+            reader = csv.reader(fh, delimiter=sep_guess)
+            for i, row in enumerate(reader):
+                if i == 0 and header:
+                    continue
+                if i > 500:
+                    break
+                for cell in row:
+                    m = _DATE_TOKEN_RE.match((cell or "").strip())
+                    if not m:
+                        continue
+                    a_s, s, b_s, y = m.groups()
+                    a, b = int(a_s), int(b_s)
+                    if a > 31 or b > 31 or a == 0 or b == 0:
+                        continue
+                    if a > 12 and b <= 12:
+                        if dayfirst is False:
+                            return None  # contradictory evidence: leave it alone
+                        dayfirst, sep, year_len4 = True, s, len(y) == 4
+                    elif b > 12 and a <= 12:
+                        if dayfirst is True:
+                            return None
+                        dayfirst, sep, year_len4 = False, s, len(y) == 4
+    except OSError:
+        return None
+    if dayfirst:
+        return f"%d{sep}%m{sep}" + ("%Y" if year_len4 else "%y")
+    return None
+
+
+def _apply_locale_numbers(conn, base_sql: str, decimal_sep: Optional[str], thousands_sep: Optional[str]) -> str:
+    """Cast VARCHAR columns that look like locale-formatted numbers to DOUBLE.
+
+    DuckDB's CSV sniffer only ever considers '.' a decimal point, so a
+    Spanish export like "-1.150,00" is left as text. When `decimal_sep` /
+    `thousands_sep` are given, every VARCHAR column of `base_sql` is tested:
+    strip the thousands separator, turn the decimal separator into '.', and
+    TRY_CAST to DOUBLE; a column is only rewritten when at least 90% of its
+    non-blank values cast cleanly, so genuinely non-numeric text columns
+    (names, categories) are left untouched.
+    """
+    decimal_sep = decimal_sep or "."
+    try:
+        described = conn.execute(f"DESCRIBE ({base_sql})").fetchall()
+    except duckdb.Error:
+        return base_sql
+    parts = []
+    changed = False
+    for row in described:
+        cname, ctype = row[0], row[1]
+        q = '"' + cname.replace('"', '""') + '"'
+        if _base_type(ctype) != "VARCHAR" or (decimal_sep == "." and not thousands_sep):
+            parts.append(q)
+            continue
+        norm = q
+        if thousands_sep:
+            norm = f"REPLACE({norm}, '{_esc(thousands_sep)}', '')"
+        if decimal_sep != ".":
+            norm = f"REPLACE({norm}, '{_esc(decimal_sep)}', '.')"
+        candidate = f"TRY_CAST(NULLIF(TRIM({norm}), '') AS DOUBLE)"
+        try:
+            non_null, castable = conn.execute(
+                f"SELECT COUNT(*) FILTER (WHERE {q} IS NOT NULL AND TRIM({q}) != ''), "
+                f"COUNT(*) FILTER (WHERE {q} IS NOT NULL AND TRIM({q}) != '' AND {candidate} IS NOT NULL) "
+                f"FROM ({base_sql})"
+            ).fetchone()
+        except duckdb.Error:
+            parts.append(q)
+            continue
+        if non_null and castable / non_null >= 0.9:
+            parts.append(f"{candidate} AS {q}")
+            changed = True
+        else:
+            parts.append(q)
+    if not changed:
+        return base_sql
+    return f"SELECT {', '.join(parts)} FROM ({base_sql}) t"

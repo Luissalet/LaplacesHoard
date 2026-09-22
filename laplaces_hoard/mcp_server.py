@@ -339,7 +339,14 @@ def data_register(path: str, name: Optional[str] = None, options: Optional[dict]
     becomes Ventas_2024) - use the returned `name`. Excel registers one
     dataset per sheet ("<name>__<sheet>"), SQLite one per table, a folder
     all files matching options.glob (default "*.csv"). CSV options:
-    delimiter, header. Returns the schema and profile (like data_describe).
+    delimiter, header, encoding (utf-8/utf-16/latin-1; auto-detected when
+    omitted, so Windows-1252 exports work without setting anything),
+    date_format (e.g. "%d/%m/%Y"; two-digit-year day-first dates like
+    "13/02/25" are auto-detected already), decimal_separator and
+    thousands_separator (e.g. "," and "." for Spanish numbers like
+    "-1.150,00" - otherwise such a column stays text and SUM/AVG fail on it).
+    Returns the schema and profile (like data_describe); a single-row result
+    with nested list columns also gets a `hint` suggesting UNNEST.
     Re-registering the same path refreshes it. Not read-only: it copies the
     data into the local catalogue (the original file is never modified).
 
