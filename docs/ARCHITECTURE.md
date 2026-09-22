@@ -21,8 +21,12 @@ laplaces_hoard/engines/*   pure Python, no FastAPI imports
   data.py        DuckDB catalogue, profiles and the SQL gate
   charts.py      Vega-Lite spec + vl-convert PNG render
   stats.py       NumPy/SciPy tests, reads dataset columns through data.py
+  ask.py         "Ask your data": schema/profile -> llm capability -> one SQL
+                 query through data.py's own gate; one retry on failure
 
 laplaces_hoard/db.py          SQLite (stdlib, WAL): work log, notebook cells, settings
+laplaces_hoard/backend.py     data/backend.json load/save and the one Link the app uses
+laplaces_hoard/hoard_link/    vendored shared-model resolver (never edited; see VENDORED.txt)
 laplaces_hoard/mcp_server.py  standalone MCP stdio adapter (imports httpx + mcp only)
 ```
 
@@ -133,6 +137,38 @@ On Windows, when the app has no console window (started detached by a
 launcher), the worker is started with the base `pythonw.exe` so no console
 window appears; with a console (the normal `start.ps1` path) the default
 `python.exe` is used.
+
+## Shared model backend
+
+`AppState` creates exactly one `hoard_link.Link` at startup (from
+`data/backend.json` plus `HOARD_*` environment overrides, `app="laplace"`),
+closed on shutdown by the app's `lifespan` handler; `create_app(..., link=)`
+accepts one already built, which is how tests inject a fake `Link` or one
+backed by `httpx.MockTransport` and stay offline. Only the `llm` capability
+is used, by `engines/ask.py`. `GET /api/backend` returns that capability's
+`Resolution` plus a fixed `app` section describing Laplace's own bundled
+backends (DuckDB, vl-convert, the computation worker - none of which need a
+model). `PUT /api/backend/config` merges Faustus URL/token and
+per-capability overrides into `backend.json` (`backend.save_config`, never
+discarding what is already there) and rebuilds the `Link` so the change
+applies immediately; the token is written to disk but never read back by
+the API (`token_set: true/false` only). `POST /api/backend/recheck`
+rebuilds the `Link` too, which is the app's way of clearing Hoard Link's
+30-second probe cache - a fresh `Link` simply starts with an empty one.
+
+"Ask your data" (`engines/ask.py`, wired to `POST /api/ui/data_ask` only -
+no MCP tool, since the agent already writes SQL itself through
+`data_query`) builds a prompt from `Catalog.describe()` for each chosen
+dataset (schema, per-column profile, up to 5 sample rows - never the full
+table), asks the `llm` capability for exactly one fenced ```sql block, and
+runs the result through `Catalog.query()` - the same read-only gate as
+every other query. A failing query gets the error message appended to the
+prompt and exactly one retry; a second failure is reported as-is. The
+answer is logged in the work log (`engine="data"`, `operation="ask"`) with
+the model's name and a cheap heuristic chart suggestion (`suggest_chart`:
+a temporal + numeric pair suggests a line chart, a text + numeric pair a
+bar chart, two numeric columns a scatter plot) for the UI to prefill its
+existing Chart builder.
 
 ## Browser-attack guard
 

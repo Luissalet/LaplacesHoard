@@ -1,3 +1,5 @@
+<img src="app-icon.png" width="96" alt="">
+
 # Laplace's Hoard
 
 ### Would you trust a language model's arithmetic? This one doesn't have to.
@@ -33,6 +35,19 @@ sees the exact input and output, and can re-run it.
 | Statistics (`stats`) | `describe ttest_1samp ttest_ind (Welch) ttest_rel mannwhitneyu wilcoxon chi2_contingency fisher_exact pearson spearman linregress proportion_ci (Wilson) normal_ci binom_test`, on inline numbers or a dataset column (every row, optional `group_by` and `where`), with effect sizes and one neutral sentence of interpretation. | The interpretation states significance only. Undefined results (e.g. a constant sample) are errors, not NaN. |
 | Data (`data_*`) | Register CSV/TSV, Parquet, JSON/NDJSON, Excel (one dataset per sheet), SQLite (one per table) or a folder of files; schema and per-column profile (nulls, distinct, min/max, mean/sd, histogram, top values); read-only DuckDB SQL; charts (bar, line, area, scatter, histogram, pie, heatmap) as PNG for the model and interactive in the UI; full-result CSV export. | Queries run on a read-only connection with file access and extension downloads disabled, behind a one-statement gate. Model-facing results are capped (1,000 rows, 500 characters per cell). Sources over 1 GB are linked as views instead of copied. Registration runs in the request (no background job queue yet). |
 | Work log and audit | Every computation from the UI or the assistant gets an id, is searchable and re-runnable; "Assistant activity" lists only the model's own tool calls. | Stored input/output is capped at 20,000 characters per entry. |
+| Ask your data | A plain-English (or Spanish) question on the Data screen sends the shared language model the schema, per-column profile and up to 5 sample rows of the chosen datasets (never the full table); it must answer with one SQL query, which runs through the same read-only gate as every other query. The SQL is shown and editable, one retry happens automatically if it fails, and the answer is logged (`engine="data"`, `operation="ask"`) with the model's name and a suggested chart. | UI only - the agent already writes SQL itself via `data_query`. Needs a resolved `llm` capability (see "Shared models" below); disabled with the reason shown when none is available. |
+
+## Shared models
+
+Laplace's Hoard vendors Hoard Link, a small resolver shared with the
+other Hoard apps, so "Ask your data" uses whichever language model
+Faustus or a local Ollama/llama.cpp server already has loaded,
+instead of loading a copy of its own. Resolution order: explicit override
+in Settings, then Faustus's own model registry, then a shared server found
+on loopback. Everything else in this app - calc, math, units, dates, every
+`data_*` tool - works fully without any model at all; Settings → Models
+shows exactly what is available and why, with a Re-check button and manual
+overrides (Faustus URL/token, per-capability URL/model).
 
 ## Connect it to Faustus
 
@@ -103,7 +118,7 @@ guard.
 .venv\Scripts\python -m pytest -q
 ```
 
-156 tests, offline, about 35 seconds. They cover the AST whitelist
+166 tests, offline, about 35 seconds. They cover the AST whitelist
 (`__import__`, attributes, lambdas, comprehensions), exact decimals and
 rounding, precision up to 1000 digits, runaway and memory-bomb inputs
 (timeout, recovery, refusal), concurrent calls through the worker, `solve`
@@ -118,7 +133,11 @@ split of the audit log, the `faustus-plugin.json` checker, and the MCP
 protocol itself: the adapter spawned over stdio against a live app,
 listing tools (keywords and annotations on each) and calling `calc`,
 `data_register`, `data_query`, `math`, `data_chart` (image returned) and
-`work_log`.
+`work_log`; the shared model backend's status/config endpoints (a token
+is never echoed back) and "Ask your data" against a mocked language model
+(`httpx.MockTransport`): a good SQL answer, one retry after a failing
+query, a clear error when the model does not answer in SQL, and the
+honest "unavailable" state with no model resolved.
 
 ## Privacy and limits
 

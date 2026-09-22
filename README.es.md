@@ -1,3 +1,5 @@
+<img src="app-icon.png" width="96" alt="">
+
 # Laplace's Hoard
 
 ### ¿Te fiarías de las cuentas de un modelo de lenguaje? Con este no hace falta.
@@ -33,6 +35,21 @@ exactas y puede repetirlo.
 | Estadística (`stats`) | `describe ttest_1samp ttest_ind (Welch) ttest_rel mannwhitneyu wilcoxon chi2_contingency fisher_exact pearson spearman linregress proportion_ci (Wilson) normal_ci binom_test`, con números pegados o con una columna de un dataset (todas las filas, con `group_by` y `where` opcionales), tamaños del efecto y una frase de interpretación neutral. | La interpretación solo habla de significación. Los resultados indefinidos (por ejemplo, una muestra constante) son errores, no NaN. |
 | Datos (`data_*`) | Registrar CSV/TSV, Parquet, JSON/NDJSON, Excel (un dataset por hoja), SQLite (uno por tabla) o una carpeta de archivos; esquema y perfil por columna (nulos, distintos, mín./máx., media/desviación, histograma, valores más frecuentes); SQL de DuckDB de solo lectura; gráficos (barras, líneas, área, dispersión, histograma, tarta, mapa de calor) en PNG para el modelo e interactivos en la interfaz; exportación a CSV del resultado completo. | Las consultas se ejecutan en una conexión de solo lectura, sin acceso a archivos ni descarga de extensiones, tras una validación que admite una sola sentencia. Lo que recibe el modelo está acotado (1.000 filas, 500 caracteres por celda). Los archivos de más de 1 GB se enlazan como vistas en lugar de copiarse. El registro se hace dentro de la propia petición (todavía no hay cola de tareas en segundo plano). |
 | Registro y auditoría | Cada cálculo, desde la interfaz o desde el asistente, recibe un id, se puede buscar y repetir; "Actividad del asistente" muestra solo las llamadas del modelo. | La entrada y la salida guardadas se limitan a 20.000 caracteres por registro. |
+| Pregunta a tus datos | Una pregunta en español o inglés en la pantalla de Datos envía al modelo de lenguaje compartido el esquema, el perfil por columna y hasta 5 filas de muestra de los datasets elegidos (nunca la tabla completa); debe responder con una sola consulta SQL, que pasa por la misma validación de solo lectura que cualquier otra consulta. El SQL se muestra y es editable, hay un reintento automático si falla, y la respuesta queda registrada (`engine="data"`, `operation="ask"`) con el nombre del modelo y un gráfico sugerido. | Solo interfaz - el agente ya escribe SQL por su cuenta con `data_query`. Necesita que la capacidad `llm` esté resuelta (ver "Modelos compartidos" más abajo); se desactiva mostrando el motivo cuando no hay ninguno disponible. |
+
+## Modelos compartidos
+
+Laplace's Hoard incluye Hoard Link, un pequeño resolutor compartido con las
+demás aplicaciones locales de la familia Hoard, para que "Pregunta a tus datos"
+use el modelo de lenguaje que Faustus o un servidor local de Ollama,
+llama.cpp u otro servidor compatible ya tenga cargado, en lugar de cargar una copia
+propia. Orden de resolución: configuración manual en Ajustes, después el
+propio registro de modelos de Faustus, y por último un servidor compartido
+encontrado en loopback. Todo lo demás en esta aplicación —calc, math,
+unidades, fechas, cada herramienta `data_*`— funciona por completo sin
+ningún modelo; Ajustes → Modelos muestra exactamente qué hay disponible y
+por qué, con un botón de volver a comprobar y configuración manual
+(URL/token de Faustus, URL/modelo por capacidad).
 
 ## Conectarlo a Faustus
 
@@ -107,7 +124,7 @@ al navegador.
 .venv\Scripts\python -m pytest -q
 ```
 
-156 tests, sin red, unos 35 segundos. Cubren la lista blanca del AST
+166 tests, sin red, unos 35 segundos. Cubren la lista blanca del AST
 (`__import__`, atributos, lambdas, comprensiones), decimales y redondeo
 exactos, precisión de hasta 1000 cifras, entradas desbocadas o que agotan
 la memoria (límite de tiempo, recuperación, rechazo), llamadas simultáneas
@@ -124,7 +141,12 @@ separación entre interfaz y asistente en el registro, el validador de
 `faustus-plugin.json` y el propio protocolo MCP: el adaptador lanzado por
 stdio contra la aplicación en marcha, listando herramientas (con palabras
 clave y anotaciones en cada una) y llamando a `calc`, `data_register`,
-`data_query`, `math`, `data_chart` (devuelve la imagen) y `work_log`.
+`data_query`, `math`, `data_chart` (devuelve la imagen) y `work_log`; los
+endpoints de estado y configuración del modelo compartido (el token nunca
+se devuelve) y "Pregunta a tus datos" contra un modelo de lenguaje simulado
+(`httpx.MockTransport`): una respuesta SQL correcta, un reintento tras una
+consulta fallida, un error claro cuando el modelo no responde en SQL, y el
+estado honesto de "no disponible" sin ningún modelo resuelto.
 
 ## Privacidad y límites
 
