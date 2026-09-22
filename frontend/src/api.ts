@@ -163,6 +163,45 @@ export interface LogItem {
   created_at: string;
 }
 
+export interface BackendCapability {
+  capability: string;
+  provider: string | null;
+  url: string | null;
+  model: string | null;
+  api: string | null;
+  state: "resolved" | "unavailable";
+  reason: string;
+}
+
+export interface BackendStatus {
+  capabilities: Record<string, BackendCapability>;
+  config: { only_resident: boolean; faustus_urls: string[]; token_set: boolean };
+  app: Record<string, { name: string; bundled: boolean }>;
+}
+
+export interface BackendConfigUpdate {
+  faustus_url?: string;
+  faustus_token?: string;
+  only_resident?: boolean;
+  capabilities?: Record<string, Record<string, unknown>>;
+}
+
+export interface AskResult {
+  id: string;
+  cite: string;
+  question: string;
+  datasets: string[];
+  sql: string;
+  model: string | null;
+  columns: { name: string; type: string }[];
+  rows: Record<string, unknown>[];
+  row_count: number;
+  total_rows: number | null;
+  truncated: boolean;
+  elapsed_ms: number;
+  chart_suggestion: { kind: string; x: string; y: string } | null;
+}
+
 export interface Cell {
   id: number;
   engine: string;
@@ -227,4 +266,10 @@ export const api = {
   cells: () => get<{ cells: Cell[] }>("/api/cells"),
   createCell: (engine: string, input: string) => post<Cell>("/api/cells", { engine, input }),
   deleteCell: (id: number) => del<{ deleted: boolean }>(`/api/cells/${id}`),
+
+  backend: () => get<BackendStatus>("/api/backend"),
+  backendConfig: (body: BackendConfigUpdate) => request<{ ok: boolean; token_set: boolean }>("/api/backend/config", { method: "PUT", body: JSON.stringify(body) }),
+  backendRecheck: () => post<Record<string, BackendCapability>>("/api/backend/recheck", {}),
+
+  ask: (question: string, datasets: string[]) => post<AskResult>("/api/ui/data_ask", { question, datasets }),
 };

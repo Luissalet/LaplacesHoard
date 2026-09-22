@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { BarChart3, Database, Download, Play, Plus, Table2 } from "lucide-react";
-import { api, ApiError, type ColumnProfile, type DatasetDetail, type DatasetSummary, type QueryResult } from "../api";
+import { BarChart3, Database, Download, Play, Plus, Sparkles, Table2 } from "lucide-react";
+import { api, ApiError, type AskResult, type ColumnProfile, type DatasetDetail, type DatasetSummary, type QueryResult } from "../api";
 import type { DictKey } from "../i18n";
 import { CiteBadge, ErrorBlock, copyCite, fmtNum } from "../components/ResultView";
 
@@ -34,7 +34,9 @@ export function DataPage({ t }: { t: T }) {
   }, [selected]);
 
   return (
-    <div className="two-col">
+    <div className="stack">
+      <AskPanel t={t} datasets={datasets} />
+      <div className="two-col">
       <div className="card">
         <div className="card-head">
           <h3 className="card-title">{t("data_title")}</h3>
@@ -84,6 +86,129 @@ export function DataPage({ t }: { t: T }) {
           </div>
         )}
       </div>
+      </div>
+    </div>
+  );
+}
+
+function AskPanel({ t, datasets }: { t: T; datasets: DatasetSummary[] }) {
+  const [available, setAvailable] = useState<boolean | null>(null);
+  const [reason, setReason] = useState<string>("");
+  const [question, setQuestion] = useState("");
+  const [scope, setScope] = useState(""); // "" = all registered datasets
+  const [result, setResult] = useState<AskResult | null>(null);
+  const [sql, setSql] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    api.backend().then((s) => {
+      const llm = s.capabilities.llm;
+      setAvailable(llm?.state === "resolved");
+      setReason(llm?.reason ?? "");
+    }).catch(() => setAvailable(false));
+  }, []);
+
+  async function ask() {
+    if (!question.trim()) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await api.ask(question.trim(), scope ? [scope] : []);
+      setResult(r);
+      setSql(r.sql);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : String(e));
+      setResult(null);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function rerunSql() {
+    if (!sql.trim()) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await api.query(sql, 200);
+      setResult((prev) => (prev ? { ...prev, ...r, sql, question: prev.question, model: prev.model, datasets: prev.datasets, chart_suggestion: prev.chart_suggestion } : null));
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="card">
+      <div className="card-head">
+        <h3 className="card-title"><Sparkles size={15} style={{ verticalAlign: -2, marginRight: 6 }} />{t("ask_title")}</h3>
+      </div>
+      <div className="row" style={{ gap: 8, alignItems: "flex-end" }}>
+        <div className="col grow">
+          <input
+            type="text"
+            value={question}
+            onChange={(e) => setQuestion(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") ask(); }}
+            placeholder={t("ask_placeholder")}
+            disabled={available === false}
+            style={{ width: "100%" }}
+          />
+        </div>
+        <select value={scope} onChange={(e) => setScope(e.target.value)} disabled={available === false}>
+          <option value="">{t("ask_all_datasets")}</option>
+          {datasets.map((d) => <option key={d.name} value={d.name}>{d.name}</option>)}
+        </select>
+        <button className="btn" onClick={ask} disabled={busy || available === false || !question.trim()} title={available === false ? reason : undefined}>
+          {t("ask_button")}
+        </button>
+      </div>
+
+      {available === false && <div className="faint" style={{ marginTop: 8 }} title={reason}>{t("ask_unavailable")}</div>}
+      {available !== false && !result && !error && <div className="faint" style={{ marginTop: 10 }}>{t("ask_empty")}</div>}
+      {error && <ErrorBlock message={error} />}
+
+      {result && (
+        <div className="stack" style={{ marginTop: 12, gap: 10 }}>
+          <div className="faint" style={{ fontSize: 12 }}>{t("ask_model")}: <span className="mono">{result.model ?? "?"}</span></div>
+          <div className="col">
+            <label className="field-label">{t("ask_sql_label")}</label>
+            <textarea
+              className="mono sql-editor"
+              value={sql}
+              spellCheck={false}
+              rows={3}
+              onChange={(e) => setSql(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) rerunSql(); }}
+            />
+          </div>
+          <div className="row">
+            <button className="btn-ghost" onClick={rerunSql} disabled={busy}>
+              <Play size={13} style={{ verticalAlign: -2, marginRight: 4 }} />
+              {t("common_run")}
+            </button>
+            <span className="grow" />
+            <CiteBadge id={result.id} onClick={copyCite} title={t("common_copy_cite")} />
+          </div>
+          <div className="table-scroll" style={{ maxHeight: 300 }}>
+            <table className="data-table">
+              <thead>
+                <tr>{result.columns.map((c) => <th key={c.name} className={NUMERIC.test(c.type) ? "num" : ""}>{c.name}</th>)}</tr>
+              </thead>
+              <tbody>
+                {result.rows.map((row, i) => (
+                  <tr key={i}>
+                    {result.columns.map((c) => (
+                      <td key={c.name} className={NUMERIC.test(c.type) ? "num" : ""}>{fmt(row[c.name])}</td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
