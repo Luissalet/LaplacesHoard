@@ -175,7 +175,15 @@ export interface BackendCapability {
 
 export interface BackendStatus {
   capabilities: Record<string, BackendCapability>;
-  config: { only_resident: boolean; faustus_urls: string[]; token_set: boolean };
+  config: {
+    only_resident: boolean;
+    faustus_urls: string[];
+    token_set: boolean;
+    /** what data/backend.json holds (never the token) */
+    saved: { faustus_url: string | null; capabilities: Record<string, { url: string | null; model: string | null }> };
+    /** why data/backend.json is being ignored, if it is */
+    error: string | null;
+  };
   app: Record<string, { name: string; bundled: boolean }>;
 }
 
@@ -183,7 +191,8 @@ export interface BackendConfigUpdate {
   faustus_url?: string;
   faustus_token?: string;
   only_resident?: boolean;
-  capabilities?: Record<string, Record<string, unknown>>;
+  /** "" clears a field; a missing field is left as it is */
+  capabilities?: Record<string, { url?: string; model?: string }>;
 }
 
 export interface AskResult {

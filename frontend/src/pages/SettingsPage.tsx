@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { RefreshCw } from "lucide-react";
+import { MessageSquareText, RefreshCw } from "lucide-react";
 import { api, ApiError, type BackendStatus, type HealthInfo } from "../api";
 import type { Lang } from "../i18n";
 import type { DictKey } from "../i18n";
@@ -68,6 +68,7 @@ function Row({ label, value }: { label: string; value: string }) {
 
 function ModelsPanel({ t }: { t: (k: DictKey) => string }) {
   const [status, setStatus] = useState<BackendStatus | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [showOverride, setShowOverride] = useState(false);
   const [faustusUrl, setFaustusUrl] = useState("");
@@ -77,7 +78,16 @@ function ModelsPanel({ t }: { t: (k: DictKey) => string }) {
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const load = () => api.backend().then((s) => { setStatus(s); return s; }).catch(() => setStatus(null));
+  const load = () =>
+    api.backend().then((s) => {
+      setStatus(s);
+      setLoadError(null);
+      // the form shows what is saved, so an override can be seen and cleared
+      setFaustusUrl(s.config.saved.faustus_url ?? "");
+      setCapUrl(s.config.saved.capabilities.llm?.url ?? "");
+      setCapModel(s.config.saved.capabilities.llm?.model ?? "");
+      return s;
+    }).catch((e) => setLoadError(e instanceof ApiError ? e.message : String(e)));
 
   useEffect(() => {
     load();
@@ -93,15 +103,16 @@ function ModelsPanel({ t }: { t: (k: DictKey) => string }) {
     }
   }
 
-  async function save() {
+  async function save(clearToken = false) {
     setBusy(true);
     setError(null);
     setSaved(false);
     try {
+      // "" clears a saved override; an empty token box leaves the stored token alone
       await api.backendConfig({
-        faustus_url: faustusUrl || undefined,
-        faustus_token: faustusToken || undefined,
-        capabilities: (capUrl || capModel) ? { llm: { url: capUrl || undefined, model: capModel || undefined } } : undefined,
+        faustus_url: faustusUrl.trim(),
+        faustus_token: clearToken ? "" : faustusToken || undefined,
+        capabilities: { llm: { url: capUrl.trim(), model: capModel.trim() } },
       });
       setFaustusToken("");
       setSaved(true);
@@ -122,19 +133,28 @@ function ModelsPanel({ t }: { t: (k: DictKey) => string }) {
         </button>
       </div>
       {!status ? (
-        <div className="faint">{t("common_loading")}</div>
+        <div className="faint">{loadError ?? t("common_loading")}</div>
       ) : (
         <div className="stack" style={{ gap: 10 }}>
+          {status.config.error && (
+            <div className="faint" style={{ color: "var(--danger)", fontSize: 12 }}>
+              {t("settings_models_config_error")} {status.config.error}
+            </div>
+          )}
           {Object.entries(status.capabilities).map(([cap, res]) => (
             <div key={cap} className="stack" style={{ gap: 2 }}>
               <div className="row" style={{ justifyContent: "space-between" }}>
-                <span className="mono">{cap}</span>
+                <span className="row" style={{ gap: 6 }}>
+                  <MessageSquareText size={14} className="muted" />
+                  <span className="mono">{cap}</span>
+                  <span className="faint" style={{ fontSize: 12 }}>{t("settings_models_llm_use")}</span>
+                </span>
                 <span className={`badge ${res.state === "resolved" ? "badge-ok" : "badge-muted"}`}>
                   {res.state === "resolved" ? t("settings_models_state_resolved") : t("settings_models_state_unavailable")}
                 </span>
               </div>
               {res.state === "resolved" && (
-                <div className="faint mono" style={{ fontSize: 12 }}>{res.provider} · {res.model}</div>
+                <div className="faint mono" style={{ fontSize: 12 }}>{res.provider} · {res.model ?? "?"}</div>
               )}
               <div className="faint" style={{ fontSize: 12 }} title={res.reason}>{res.reason}</div>
             </div>
@@ -145,6 +165,7 @@ function ModelsPanel({ t }: { t: (k: DictKey) => string }) {
           </button>
           {showOverride && (
             <div className="stack" style={{ gap: 8 }}>
+              <div className="faint" style={{ fontSize: 12 }}>{t("settings_models_override_hint")}</div>
               <div className="col">
                 <label className="field-label">{t("settings_models_faustus_url")}</label>
                 <input type="text" className="mono" value={faustusUrl} onChange={(e) => setFaustusUrl(e.target.value)} placeholder="http://127.0.0.1:7000" />
@@ -154,7 +175,12 @@ function ModelsPanel({ t }: { t: (k: DictKey) => string }) {
                   {t("settings_models_faustus_token")}
                   {status.config.token_set && <span className="faint"> ({t("settings_models_token_set")})</span>}
                 </label>
-                <input type="password" className="mono" value={faustusToken} onChange={(e) => setFaustusToken(e.target.value)} placeholder="ody_..." />
+                <div className="row" style={{ gap: 8 }}>
+                  <input type="password" className="mono grow" value={faustusToken} onChange={(e) => setFaustusToken(e.target.value)} placeholder="ody_..." />
+                  {status.config.token_set && (
+                    <button className="btn-ghost" disabled={busy} onClick={() => save(true)}>{t("settings_models_forget_token")}</button>
+                  )}
+                </div>
               </div>
               <div className="row">
                 <div className="col grow">
@@ -167,7 +193,7 @@ function ModelsPanel({ t }: { t: (k: DictKey) => string }) {
                 </div>
               </div>
               {error && <div className="faint" style={{ color: "var(--danger)" }}>{error}</div>}
-              <button className="btn" disabled={busy} onClick={save}>
+              <button className="btn" disabled={busy} onClick={() => save()}>
                 {saved ? t("settings_models_saved") : t("settings_models_save")}
               </button>
             </div>

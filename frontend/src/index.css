@@ -196,7 +196,7 @@ label.field-label {
   letter-spacing: 0.03em;
 }
 
-input[type="text"], input[type="number"], input[type="search"], select, textarea {
+input[type="text"], input[type="password"], input[type="number"], input[type="search"], select, textarea {
   background: var(--bg-sunken);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
