@@ -5,20 +5,27 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+from laplaces_hoard import backend as backend_mod
 from laplaces_hoard.api import create_app
-from laplaces_hoard.hoard_link import Link, LinkConfig
+
+
+def offline_link_factory(data_dir: Path):
+    """Links that read data/backend.json like the real app but whose every
+    probe (Faustus, llama.cpp, Ollama...) gets a "nothing here" 404 from a
+    MockTransport: never a real socket, never the runner's HOARD_* env."""
+    def factory():
+        client = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(404, json={})))
+        return backend_mod.load_link(data_dir, env={}, client=client)
+    return factory
 
 
 @pytest.fixture()
 def client(data_dir: Path) -> TestClient:
-    # An explicit config with no url/model resolves nothing and never probes
-    # the network, so this fixture (unlike test_api.py's) does not touch a
-    # loopback port even by accident.
-    link = Link(LinkConfig.load(None, env={}, app="laplace"))
-    app = create_app(data_dir=data_dir, static_dir=None, port=8812, link=link)
+    app = create_app(data_dir=data_dir, static_dir=None, port=8812, link_factory=offline_link_factory(data_dir))
     return TestClient(app, base_url="http://127.0.0.1:8812")
 
 
@@ -73,3 +80,56 @@ def test_backend_recheck_returns_the_used_capabilities(client: TestClient):
     r = client.post("/api/backend/recheck")
     assert r.status_code == 200
     assert set(r.json()) == {"llm"}
+
+
+def test_backend_status_shows_saved_overrides_so_they_can_be_cleared(client: TestClient):
+    client.put("/api/backend/config", json={
+        "faustus_url": "http://127.0.0.1:7999", "faustus_token": "ody_secret_value",
+        "capabilities": {"llm": {"url": "http://127.0.0.1:9999/v1", "model": "test-model"}},
+    })
+    saved = client.get("/api/backend").json()["config"]["saved"]
+    assert saved == {
+        "faustus_url": "http://127.0.0.1:7999",
+        "capabilities": {"llm": {"url": "http://127.0.0.1:9999/v1", "model": "test-model"}},
+    }
+    # "" clears an override; the llm then falls back to probing (and finds nothing)
+    client.put("/api/backend/config", json={"capabilities": {"llm": {"url": "", "model": ""}}})
+    status = client.get("/api/backend").json()
+    assert status["config"]["saved"]["capabilities"]["llm"] == {"url": None, "model": None}
+    assert status["capabilities"]["llm"]["state"] == "unavailable"
+    assert "ody_secret_value" not in json.dumps(status)
+
+
+@pytest.mark.parametrize("body", [
+    {"capabilities": {"llm": {"command": "not-a-list"}}},  # would make backend.json unloadable
+    {"capabilities": {"tts": {"command": ["anything"]}}},  # a capability this app does not use
+    {"capabilities": {"llm": {"url": 5}}},
+    {"unknown_field": True},
+])
+def test_backend_config_rejects_what_the_form_never_sends(client: TestClient, data_dir: Path, body: dict):
+    r = client.put("/api/backend/config", json=body)
+    assert r.status_code == 422
+    assert r.json()["error"] == "invalid_arguments"
+    assert not (data_dir / "backend.json").exists()
+
+
+def test_a_broken_backend_json_does_not_stop_the_app(data_dir: Path):
+    (data_dir / "backend.json").write_text("{ not json", encoding="utf-8")
+    app = create_app(data_dir=data_dir, static_dir=None, port=8812, link_factory=offline_link_factory(data_dir))
+    client = TestClient(app, base_url="http://127.0.0.1:8812")
+    assert client.get("/api/health").status_code == 200
+    body = client.get("/api/backend").json()
+    assert "not valid JSON" in body["config"]["error"]
+    assert body["capabilities"]["llm"]["state"] == "unavailable"
+    # saving from the Settings form replaces the broken file with a valid one
+    assert client.put("/api/backend/config", json={"capabilities": {"llm": {"url": "http://127.0.0.1:9999/v1"}}}).status_code == 200
+    body = client.get("/api/backend").json()
+    assert body["config"]["error"] is None
+    assert body["capabilities"]["llm"]["state"] == "resolved"
+
+
+def test_load_link_ignores_a_broken_config_but_keeps_env_overrides(data_dir: Path):
+    (data_dir / "backend.json").write_text('{"capabilities": {"llm": {"command": "x"}}}', encoding="utf-8")
+    link = backend_mod.load_link(data_dir, env={"HOARD_LLM_URL": "http://127.0.0.1:9999/v1"})
+    assert link.config.capability("llm").url == "http://127.0.0.1:9999/v1"
+    assert "command must be a list" in backend_mod.config_error(data_dir)

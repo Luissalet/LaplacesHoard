@@ -10,13 +10,20 @@ imports, so it is usable from tests and from ``api.py`` alike.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
+
+import httpx
 
 from .hoard_link import Link, LinkConfig
 
-__all__ = ["USED_CAPABILITIES", "load_link", "save_config", "token_set", "app_backends"]
+__all__ = [
+    "USED_CAPABILITIES", "load_link", "config_error", "save_config", "saved_overrides", "token_set", "app_backends",
+]
+
+log = logging.getLogger("laplaces_hoard.backend")
 
 BACKEND_FILE = "backend.json"
 USED_CAPABILITIES = ("llm",)
@@ -37,11 +44,39 @@ def _read_raw(data_dir: Path) -> dict[str, Any]:
     return raw if isinstance(raw, dict) else {}
 
 
-def load_link(data_dir: Path) -> Link:
-    """Build the app's one `Link`, reading `data/backend.json` when it exists."""
+def config_error(data_dir: Path) -> Optional[str]:
+    """Why `data/backend.json` cannot be used (hand-edited into invalid JSON, a bad field), or None."""
     path = _backend_path(data_dir)
-    config = LinkConfig.load(path if path.is_file() else None, env=os.environ, app="laplace")
-    return Link(config)
+    if not path.is_file():
+        return None
+    try:
+        LinkConfig.load(path, env={}, app="laplace")
+    except ValueError as exc:
+        return str(exc)
+    return None
+
+
+def load_link(
+    data_dir: Path,
+    *,
+    env: Optional[Mapping[str, str]] = None,
+    client: Optional[httpx.AsyncClient] = None,
+) -> Link:
+    """Build the app's one `Link`, reading `data/backend.json` when it exists.
+
+    A broken `backend.json` must never stop the app from starting (nothing
+    but "Ask your data" needs a model): it is ignored with a warning, the
+    environment overrides still apply, and `GET /api/backend` reports it.
+    `env`/`client` exist for offline tests.
+    """
+    path = _backend_path(data_dir)
+    env = os.environ if env is None else env
+    try:
+        config = LinkConfig.load(path if path.is_file() else None, env=env, app="laplace")
+    except ValueError as exc:
+        log.warning("ignoring %s: %s", path, exc)
+        config = LinkConfig.load(None, env=env, app="laplace")
+    return Link(config, client=client)
 
 
 def save_config(
@@ -104,9 +139,22 @@ def save_config(
     _backend_path(data_dir).write_text(json.dumps(raw, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
+def saved_overrides(data_dir: Path) -> dict[str, Any]:
+    """The non-secret overrides stored in `data/backend.json`, so the Settings form can show and clear them."""
+    raw = _read_raw(data_dir)
+    faustus = raw.get("faustus") if isinstance(raw.get("faustus"), dict) else {}
+    caps = raw.get("capabilities") if isinstance(raw.get("capabilities"), dict) else {}
+    out_caps = {}
+    for cap in USED_CAPABILITIES:
+        entry = caps.get(cap) if isinstance(caps.get(cap), dict) else {}
+        out_caps[cap] = {"url": entry.get("url") or None, "model": entry.get("model") or None}
+    return {"faustus_url": faustus.get("url") or None, "capabilities": out_caps}
+
+
 def token_set(data_dir: Path) -> bool:
     """Whether a Faustus token is stored — the API must never echo the token itself."""
-    return bool((_read_raw(data_dir).get("faustus") or {}).get("token"))
+    faustus = _read_raw(data_dir).get("faustus")
+    return isinstance(faustus, dict) and bool(faustus.get("token"))
 
 
 def app_backends() -> dict[str, Any]:

@@ -32,8 +32,7 @@ def _mock_link(handler) -> Link:
 @pytest.fixture()
 def client_with_link(data_dir: Path):
     def make(handler):
-        link = _mock_link(handler)
-        app = create_app(data_dir=data_dir, static_dir=None, port=8812, link=link)
+        app = create_app(data_dir=data_dir, static_dir=None, port=8812, link_factory=lambda: _mock_link(handler))
         return TestClient(app, base_url="http://127.0.0.1:8812")
     return make
 
@@ -73,11 +72,32 @@ def test_ask_returns_query_result_and_chart_suggestion(client_with_link, registe
     assert log_item["source"] == "ui"
 
 
+def test_ask_sends_schema_and_at_most_five_sample_rows(client_with_link, registered, sample_csv: Path):
+    prompts: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        prompts.append(json.loads(request.content)["messages"][-1]["content"])
+        return _openai_chat_response("```sql\nSELECT COUNT(*) AS n FROM sample\n```")
+
+    client = client_with_link(handler)
+    registered(client, sample_csv)
+    assert client.post("/api/ui/data_ask", json={"question": "how many rows", "datasets": ["sample"]}).status_code == 200
+
+    (prompt,) = prompts
+    assert 'Dataset "sample" (6 rows)' in prompt
+    assert "region: VARCHAR" in prompt and "amount: BIGINT" in prompt
+    assert "Question: how many rows" in prompt
+    # sample.csv has 6 rows; its 6th ("West | 60") must never reach the model
+    assert "North | 100" in prompt and "West | 60" not in prompt
+
+
 def test_ask_retries_once_after_a_failing_query(client_with_link, registered, sample_csv: Path):
     calls = {"n": 0}
+    prompts: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         calls["n"] += 1
+        prompts.append(json.loads(request.content)["messages"][-1]["content"])
         if calls["n"] == 1:
             return _openai_chat_response("```sql\nSELECT nonexistent_column FROM sample\n```")
         return _openai_chat_response("```sql\nSELECT COUNT(*) AS n FROM sample\n```")
@@ -89,6 +109,9 @@ def test_ask_retries_once_after_a_failing_query(client_with_link, registered, sa
     assert r.status_code == 200, r.text
     assert calls["n"] == 2
     assert r.json()["rows"][0]["n"] == 6
+    # the retry tells the model which query failed and why
+    assert "SELECT nonexistent_column FROM sample" in prompts[1]
+    assert "nonexistent_column" in prompts[1].split("Error:", 1)[1]
 
 
 def test_ask_reports_a_second_failure_after_the_retry(client_with_link, registered, sample_csv: Path):
@@ -121,8 +144,10 @@ def test_ask_is_honestly_unavailable_with_no_model_resolved(data_dir: Path, samp
         # uniform "nothing here" 404 - never a real socket, still offline.
         return httpx.Response(404, json={})
 
-    link = Link(LinkConfig.load(None, env={}, app="laplace"), client=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
-    app = create_app(data_dir=data_dir, static_dir=None, port=8812, link=link)
+    def factory() -> Link:
+        return Link(LinkConfig.load(None, env={}, app="laplace"), client=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+
+    app = create_app(data_dir=data_dir, static_dir=None, port=8812, link_factory=factory)
     client = TestClient(app, base_url="http://127.0.0.1:8812")
     r = client.post("/api/agent/data_register", json={"path": str(sample_csv), "name": "sample"})
     assert r.status_code == 200

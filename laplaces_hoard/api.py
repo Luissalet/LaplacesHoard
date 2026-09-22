@@ -17,14 +17,14 @@ import time
 from contextlib import asynccontextmanager
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Any, Callable, Literal, Optional, Union
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from . import backend as backend_mod
 from . import db
@@ -105,13 +105,21 @@ def _dataset_brief(d: dict) -> dict:
 
 
 class AppState:
-    def __init__(self, data_dir: Path, link: Optional[Link] = None):
+    def __init__(self, data_dir: Path, link_factory: Optional[Callable[[], Link]] = None):
         self.data_dir = data_dir
         self.conn = db.connect(data_dir)
         self.catalog = Catalog(data_dir)
-        # One Link per app, closed on shutdown; injectable in tests (a fake
-        # Link or one backed by httpx.MockTransport) so tests stay offline.
-        self.link = link if link is not None else backend_mod.load_link(data_dir)
+        # One Link per app, closed on shutdown. The factory is also what
+        # "save config" and "re-check" use to rebuild it, so a test's
+        # factory (a Link backed by httpx.MockTransport) keeps every
+        # rebuilt Link offline too.
+        self.link_factory = link_factory or (lambda: backend_mod.load_link(data_dir))
+        self.link = self.link_factory()
+
+    async def rebuild_link(self) -> None:
+        """A fresh Link: picks up a saved config and starts with an empty probe cache."""
+        old, self.link = self.link, self.link_factory()
+        await old.aclose()
 
 
 # ---------------------------------------------------------------------- #
@@ -230,11 +238,20 @@ class CellBody(BaseModel):
     input: str
 
 
+class CapabilityOverride(BaseModel):
+    # Only what the Settings form edits; "" clears a field. Anything else
+    # (e.g. a `command` to run) is rejected rather than written to disk.
+    model_config = ConfigDict(extra="forbid")
+    url: Optional[str] = None
+    model: Optional[str] = None
+
+
 class BackendConfigBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     faustus_url: Optional[str] = None
     faustus_token: Optional[str] = None
     only_resident: Optional[bool] = None
-    capabilities: Optional[dict[str, dict[str, Any]]] = None
+    capabilities: Optional[dict[Literal["llm"], CapabilityOverride]] = None
 
 
 class AskBody(BaseModel):
@@ -242,10 +259,15 @@ class AskBody(BaseModel):
     datasets: list[str] = Field(default_factory=list)
 
 
-def create_app(data_dir: Path, static_dir: Optional[Path] = None, port: int = 8812, link: Optional[Link] = None) -> FastAPI:
+def create_app(
+    data_dir: Path,
+    static_dir: Optional[Path] = None,
+    port: int = 8812,
+    link_factory: Optional[Callable[[], Link]] = None,
+) -> FastAPI:
     data_dir = Path(data_dir)
     data_dir.mkdir(parents=True, exist_ok=True)
-    state = AppState(data_dir, link=link)
+    state = AppState(data_dir, link_factory=link_factory)
 
     _setup_logging(data_dir)
     # start the computation worker now (SymPy/Pint imports take seconds on
@@ -279,32 +301,29 @@ def create_app(data_dir: Path, static_dir: Optional[Path] = None, port: int = 88
     # helpers
     # ------------------------------------------------------------------ #
 
-    def _record(engine: str, operation: str, input_data: Any, source: str, fn):
-        start = time.monotonic()
-        try:
-            output = fn()
-        except _ENGINE_ERRORS as exc:
-            elapsed = (time.monotonic() - start) * 1000
+    def _log_failure(engine: str, operation: str, input_data: Any, source: str, start: float, exc: Exception):
+        """Log a failed operation in the work log and raise the JSON error the API answers with."""
+        elapsed = (time.monotonic() - start) * 1000
+        if isinstance(exc, _ENGINE_ERRORS):
             db.log_computation(
                 state.conn, engine=engine, operation=operation, input_data=input_data,
                 output_data=None, ok=False, error=str(exc), elapsed_ms=elapsed, source=source,
             )
             log.info("%s %s.%s error %s", source, engine, operation, _error_code(exc))
             raise HTTPException(status_code=400, detail={"error": _error_code(exc), "message": str(exc)}) from exc
-        except HTTPException:
-            raise
-        except Exception as exc:  # noqa: BLE001 - an engine bug must still answer in JSON and be logged
-            elapsed = (time.monotonic() - start) * 1000
-            message = f"{type(exc).__name__}: {exc}"[:500]
-            db.log_computation(
-                state.conn, engine=engine, operation=operation, input_data=input_data,
-                output_data=None, ok=False, error=message, elapsed_ms=elapsed, source=source,
-            )
-            log.exception("%s %s.%s failed unexpectedly", source, engine, operation)
-            raise HTTPException(
-                status_code=500,
-                detail={"error": "internal_error", "message": f"unexpected failure in {engine}.{operation}: {message}"},
-            ) from exc
+        # an engine bug must still answer in JSON and be logged
+        message = f"{type(exc).__name__}: {exc}"[:500]
+        db.log_computation(
+            state.conn, engine=engine, operation=operation, input_data=input_data,
+            output_data=None, ok=False, error=message, elapsed_ms=elapsed, source=source,
+        )
+        log.exception("%s %s.%s failed unexpectedly", source, engine, operation)
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "internal_error", "message": f"unexpected failure in {engine}.{operation}: {message}"},
+        ) from exc
+
+    def _log_success(engine: str, operation: str, input_data: Any, source: str, start: float, output: Any):
         elapsed = (time.monotonic() - start) * 1000
         # "_chart_path" goes to its own column; "_response_extra" (PNG bytes,
         # full chart spec) is returned but never written to the work log.
@@ -320,6 +339,16 @@ def create_app(data_dir: Path, static_dir: Optional[Path] = None, port: int = 88
             return {"id": cid, "cite": f"[{cid}]", **loggable, **extra}
         return {"id": cid, "cite": f"[{cid}]", "result": output}
 
+    def _record(engine: str, operation: str, input_data: Any, source: str, fn):
+        start = time.monotonic()
+        try:
+            output = fn()
+        except HTTPException:
+            raise
+        except Exception as exc:  # noqa: BLE001 - _log_failure answers every failure in JSON
+            _log_failure(engine, operation, input_data, source, start, exc)
+        return _log_success(engine, operation, input_data, source, start, output)
+
     def ui(engine: str, operation: str, input_data: Any, fn):
         return _record(engine, operation, input_data, "ui", fn)
 
@@ -328,40 +357,11 @@ def create_app(data_dir: Path, static_dir: Optional[Path] = None, port: int = 88
         start = time.monotonic()
         try:
             output = await fn()
-        except _ENGINE_ERRORS as exc:
-            elapsed = (time.monotonic() - start) * 1000
-            db.log_computation(
-                state.conn, engine=engine, operation=operation, input_data=input_data,
-                output_data=None, ok=False, error=str(exc), elapsed_ms=elapsed, source=source,
-            )
-            log.info("%s %s.%s error %s", source, engine, operation, _error_code(exc))
-            raise HTTPException(status_code=400, detail={"error": _error_code(exc), "message": str(exc)}) from exc
         except HTTPException:
             raise
-        except Exception as exc:  # noqa: BLE001 - an engine bug must still answer in JSON and be logged
-            elapsed = (time.monotonic() - start) * 1000
-            message = f"{type(exc).__name__}: {exc}"[:500]
-            db.log_computation(
-                state.conn, engine=engine, operation=operation, input_data=input_data,
-                output_data=None, ok=False, error=message, elapsed_ms=elapsed, source=source,
-            )
-            log.exception("%s %s.%s failed unexpectedly", source, engine, operation)
-            raise HTTPException(
-                status_code=500,
-                detail={"error": "internal_error", "message": f"unexpected failure in {engine}.{operation}: {message}"},
-            ) from exc
-        elapsed = (time.monotonic() - start) * 1000
-        chart_path = output.get("_chart_path") if isinstance(output, dict) else None
-        extra = output.get("_response_extra", {}) if isinstance(output, dict) else {}
-        loggable = {k: v for k, v in output.items() if not k.startswith("_")} if isinstance(output, dict) else output
-        cid = db.log_computation(
-            state.conn, engine=engine, operation=operation, input_data=input_data,
-            output_data=loggable, ok=True, error=None, elapsed_ms=elapsed, source=source,
-            chart_path=chart_path,
-        )
-        if isinstance(output, dict):
-            return {"id": cid, "cite": f"[{cid}]", **loggable, **extra}
-        return {"id": cid, "cite": f"[{cid}]", "result": output}
+        except Exception as exc:  # noqa: BLE001 - _log_failure answers every failure in JSON
+            _log_failure(engine, operation, input_data, source, start, exc)
+        return _log_success(engine, operation, input_data, source, start, output)
 
     # ------------------------------------------------------------------ #
     # health
@@ -393,6 +393,9 @@ def create_app(data_dir: Path, static_dir: Optional[Path] = None, port: int = 88
                 "only_resident": state.link.config.only_resident,
                 "faustus_urls": list(state.link.config.faustus_urls),
                 "token_set": backend_mod.token_set(state.data_dir),
+                # what data/backend.json holds (never the token), so the form can show and clear it
+                "saved": backend_mod.saved_overrides(state.data_dir),
+                "error": backend_mod.config_error(state.data_dir),
             },
             "app": backend_mod.app_backends(),
         }
@@ -401,20 +404,17 @@ def create_app(data_dir: Path, static_dir: Optional[Path] = None, port: int = 88
     async def put_backend_config(body: BackendConfigBody):
         backend_mod.save_config(
             state.data_dir, faustus_url=body.faustus_url, faustus_token=body.faustus_token,
-            only_resident=body.only_resident, capabilities=body.capabilities,
+            only_resident=body.only_resident,
+            capabilities={cap: o.model_dump(exclude_unset=True) for cap, o in (body.capabilities or {}).items()},
         )
         # rebuild the Link so the new config applies immediately, without restarting the app
-        old_link = state.link
-        state.link = backend_mod.load_link(state.data_dir)
-        await old_link.aclose()
+        await state.rebuild_link()
         return {"ok": True, "token_set": backend_mod.token_set(state.data_dir)}
 
     @app.post("/api/backend/recheck")
     async def recheck_backend():
         # a fresh Link has an empty probe cache, which is what "re-check now" means
-        old_link = state.link
-        state.link = backend_mod.load_link(state.data_dir)
-        await old_link.aclose()
+        await state.rebuild_link()
         status = await state.link.status()
         return {cap: status[cap] for cap in backend_mod.USED_CAPABILITIES}
 
