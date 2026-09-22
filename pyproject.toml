@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Exact numbers for language models: arithmetic, symbolic math, units, statistics, dates and SQL over local files, logged and citable."
 requires-python = ">=3.11"
 license = { text = "MIT" }
+
 dependencies = [
   "fastapi==0.141.1",
   "uvicorn[standard]==0.53.0",
@@ -21,6 +22,9 @@ dependencies = [
   "mcp==1.30.0",
   "httpx==0.28.1",
 ]
+
+[project.urls]
+Repository = "https://github.com/Luissalet/LaplacesHoard"
 
 [project.optional-dependencies]
 dev = [
