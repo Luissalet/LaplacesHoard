@@ -59,3 +59,63 @@ def test_where_clause_rejects_injection_attempts(data_dir: Path, sample_csv: Pat
 def test_unknown_test_name_is_rejected():
     with pytest.raises(stats.StatsError):
         stats.run("not_a_real_test", data=[1, 2, 3])
+
+
+# -- regressions found in review ------------------------------------------
+
+def test_undefined_test_is_an_error_not_a_nan():
+    # a constant sample used to produce NaN, which crashed the JSON response
+    with pytest.raises(stats.StatsError, match="undefined"):
+        stats.run("pearson", data=[1, 1, 1], data2=[1, 2, 3])
+
+
+def test_impossible_counts_are_rejected():
+    with pytest.raises(stats.StatsError, match="successes <= trials"):
+        stats.run("proportion_ci", successes=5, trials=3)
+    with pytest.raises(stats.StatsError, match="successes"):
+        stats.run("binom_test", successes=None, trials=10)
+
+
+def test_correlation_interpretation_talks_about_correlation():
+    r = stats.run("pearson", data=[1, 2, 3, 4, 5, 6], data2=[2, 4, 5, 8, 10, 12])
+    assert "correlation" in r["interpretation"]
+    assert "difference" not in r["interpretation"]
+
+
+def test_linregress_reports_a_slope_confidence_interval():
+    x = [1, 2, 3, 4, 5, 6, 7, 8]
+    y = [2.1, 3.9, 6.2, 7.8, 10.1, 12.2, 13.8, 16.1]
+    r = stats.run("linregress", data=x, data2=y)
+    ref = sp.linregress(x, y)
+    t = sp.t.ppf(0.975, len(x) - 2)
+    assert r["slope_ci_low"] == pytest.approx(ref.slope - t * ref.stderr)
+    assert r["slope_ci_high"] == pytest.approx(ref.slope + t * ref.stderr)
+
+
+def test_wilcoxon_one_sample_against_mu():
+    r = stats.run("wilcoxon", data=[5.1, 4.9, 5.6, 5.8, 6.0, 6.2, 5.9, 6.4], mu=5.0)
+    ref = sp.wilcoxon([v - 5.0 for v in [5.1, 4.9, 5.6, 5.8, 6.0, 6.2, 5.9, 6.4]])
+    assert r["p_value"] == pytest.approx(ref.pvalue)
+
+
+def test_non_numeric_data_is_an_actionable_error():
+    with pytest.raises(stats.StatsError, match="only numbers"):
+        stats.run("describe", data=[1, "two", 3])
+
+
+def test_where_filter_rejects_subqueries_but_allows_column_names_with_keywords(tmp_path):
+    import csv
+    from laplaces_hoard.engines.data import Catalog
+
+    path = tmp_path / "t.csv"
+    with path.open("w", newline="", encoding="utf-8") as fh:
+        w = csv.writer(fh)
+        w.writerow(["last_update", "v"])
+        for i in range(10):
+            w.writerow([i, i * 2])
+    cat = Catalog(tmp_path / "data")
+    cat.register(str(path))
+    r = stats.run("describe", dataset="t", column="v", where="last_update > 4", catalog=cat)
+    assert r["n"] == 5
+    with pytest.raises(stats.StatsError):
+        stats.run("describe", dataset="t", column="v", where="v IN (SELECT 1)", catalog=cat)

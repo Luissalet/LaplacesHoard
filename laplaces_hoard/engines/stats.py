@@ -11,6 +11,7 @@ registered dataset + column via the `data` engine's `Catalog`.
 from __future__ import annotations
 
 import math
+import re
 from typing import Any, Optional
 
 import numpy as np
@@ -38,7 +39,7 @@ def _resolve_column(catalog: Catalog, dataset: str, column: str, where: Optional
         _validate_where(where)
         sql += f" AND ({where})"
     result = catalog.query_all(sql)
-    return [float(row[column]) for row in result["rows"] if row[column] is not None]
+    return _floats([row[column] for row in result["rows"]], f"column {column!r}")
 
 
 def _resolve_grouped(catalog: Catalog, dataset: str, column: str, group_by: str, where: Optional[str] = None):
@@ -51,7 +52,7 @@ def _resolve_grouped(catalog: Catalog, dataset: str, column: str, group_by: str,
     result = catalog.query_all(sql)
     groups: dict[str, list[float]] = {}
     for row in result["rows"]:
-        groups.setdefault(str(row["grp"]), []).append(float(row["val"]))
+        groups.setdefault(str(row["grp"]), []).extend(_floats([row["val"]], f"column {column!r}"))
     return groups
 
 
@@ -61,11 +62,33 @@ def _quote_ident(name: str) -> str:
     return f'"{name}"'
 
 
+_WHERE_BANNED = re.compile(
+    r";|--|/\*|\b(attach|detach|pragma|insert|update|delete|drop|create|copy|install|load|set|call|export|"
+    r"select|read_csv|read_csv_auto|read_parquet|read_json|read_json_auto|read_text|read_blob|glob)\b",
+    re.I,
+)
+
+
 def _validate_where(where: str) -> None:
-    banned = (";", "--", "/*", "attach", "pragma", "insert", "update", "delete", "drop", "create")
-    low = where.lower()
-    if any(b in low for b in banned):
-        raise StatsError("'where' may only be a simple filter expression")
+    # The whole query still goes through the read-only SQL gate; this only keeps
+    # `where` what the name says: a row filter such as "region = 'North' AND units > 3".
+    if _WHERE_BANNED.search(where):
+        raise StatsError("'where' may only be a simple row filter, e.g. \"region = 'North' AND units > 3\"")
+
+
+def _floats(values: list, label: str) -> list[float]:
+    out = []
+    for v in values:
+        if v is None:
+            continue
+        try:
+            f = float(v)
+        except (TypeError, ValueError) as exc:
+            raise StatsError(f"{label} must contain only numbers; got {v!r}") from exc
+        if f != f:
+            continue
+        out.append(f)
+    return out
 
 
 def _get_data(
@@ -76,7 +99,7 @@ def _get_data(
     where: Optional[str],
 ) -> list[float]:
     if values is not None:
-        return [float(v) for v in values]
+        return _floats(values, "data")
     if dataset and column:
         if catalog is None:
             raise StatsError("dataset/column given but no data catalog is available")
@@ -84,10 +107,44 @@ def _get_data(
     raise StatsError("provide either inline data or dataset+column")
 
 
-def _interp_p(p: float, alpha: float = 0.05) -> str:
+_EFFECT = {
+    "difference": ("the difference is", "no statistically significant difference was found"),
+    "correlation": ("the correlation is statistically different from zero", "no statistically significant correlation was found"),
+    "slope": ("the slope is statistically different from zero", "no statistically significant linear trend was found"),
+    "association": ("the association between the two variables is", "no statistically significant association was found"),
+    "proportion": ("the observed proportion differs from p0", "no statistically significant difference from p0 was found"),
+}
+
+
+def _interp_p(p: float, alpha: float = 0.05, what: str = "difference") -> str:
+    yes, no = _EFFECT[what]
+    if not yes.endswith(("zero", "p0")):
+        yes = f"{yes} statistically significant"
     if p < alpha:
-        return f"p = {p:.4g} < {alpha}: the difference is statistically significant at the {int(alpha*100)}% level; this says nothing about effect size or cause."
-    return f"p = {p:.4g} >= {alpha}: no statistically significant difference was found at the {int(alpha*100)}% level; absence of evidence is not evidence of absence."
+        return (f"p = {p:.4g} < {alpha}: {yes} at the {int(alpha*100)}% level; "
+                "this says nothing about effect size or cause.")
+    return (f"p = {p:.4g} >= {alpha}: {no} at the {int(alpha*100)}% level; "
+            "absence of evidence is not evidence of absence.")
+
+
+def _need(d: list[float], n: int, test: str) -> None:
+    if len(d) < n:
+        raise StatsError(f"{test} needs at least {n} numeric values per sample, got {len(d)}")
+
+
+def _finite(result: dict[str, Any]) -> dict[str, Any]:
+    """NaN/inf cannot travel as JSON and mean the test was undefined for this data."""
+    for key in ("statistic", "p_value", "r", "rho", "slope"):
+        v = result.get(key)
+        if isinstance(v, float) and not math.isfinite(v):
+            raise StatsError(
+                f"{result.get('test', 'the test')} is undefined for this data ({key} = {v}); "
+                "typical causes: a constant sample (zero variance) or too few values"
+            )
+    for key, v in list(result.items()):
+        if isinstance(v, float) and not math.isfinite(v):
+            result[key] = None
+    return result
 
 
 def _describe(data: list[float]) -> dict[str, Any]:
@@ -108,7 +165,16 @@ def _describe(data: list[float]) -> dict[str, Any]:
     }
 
 
-def run(
+def run(test: str, **kwargs: Any) -> dict[str, Any]:
+    try:
+        return _finite(_run(test, **kwargs))
+    except (StatsError, DataError):
+        raise
+    except (ValueError, TypeError, ZeroDivisionError, FloatingPointError) as exc:
+        raise StatsError(f"{test}: {exc}") from exc
+
+
+def _run(
     test: str,
     *,
     data: Optional[list[float]] = None,
@@ -126,7 +192,9 @@ def run(
     p0: float = 0.5,
 ) -> dict[str, Any]:
     if test not in TESTS:
-        raise StatsError(f"unknown test: {test}; choose one of {TESTS}")
+        raise StatsError(f"unknown test: {test}; choose one of {', '.join(TESTS)}")
+    if not 0 < confidence < 1:
+        raise StatsError("confidence must be between 0 and 1, e.g. 0.95")
 
     if test == "describe":
         d = _get_data(data, catalog, dataset, column, where)
@@ -134,6 +202,7 @@ def run(
 
     if test == "ttest_1samp":
         d = _get_data(data, catalog, dataset, column, where)
+        _need(d, 2, "ttest_1samp")
         stat, p = sp.ttest_1samp(d, mu)
         return {
             "test": "One-sample t-test", "statistic": float(stat), "p_value": float(p),
@@ -151,6 +220,8 @@ def run(
             d1 = _get_data(data, catalog, dataset, column, where)
             d2 = _get_data(data2, catalog, dataset, column2, where)
             name1, name2 = "group1", "group2"
+        _need(d1, 2, test)
+        _need(d2, 2, test)
         if test == "ttest_ind":
             res = sp.ttest_ind(d1, d2, equal_var=False)
             pooled_sd = math.sqrt((np.var(d1, ddof=1) + np.var(d2, ddof=1)) / 2)
@@ -166,6 +237,7 @@ def run(
         return {
             "test": "Mann-Whitney U", "statistic": float(res.statistic), "p_value": float(res.pvalue),
             "n1": len(d1), "n2": len(d2), "group1": name1, "group2": name2,
+            "rank_biserial": float(1 - 2 * res.statistic / (len(d1) * len(d2))),
             "interpretation": _interp_p(float(res.pvalue)),
         }
 
@@ -183,10 +255,14 @@ def run(
 
     if test == "wilcoxon":
         d1 = _get_data(data, catalog, dataset, column, where)
-        d2 = _get_data(data2, catalog, dataset, column2, where)
-        res = sp.wilcoxon(d1, d2)
+        one_sample = data2 is None and not column2
+        d2 = None if one_sample else _get_data(data2, catalog, dataset, column2, where)
+        if d2 is not None and len(d1) != len(d2):
+            raise StatsError("wilcoxon on two samples needs paired, equal-length samples")
+        res = sp.wilcoxon([v - mu for v in d1]) if one_sample else sp.wilcoxon(d1, d2)
         return {
-            "test": "Wilcoxon signed-rank", "statistic": float(res.statistic), "p_value": float(res.pvalue),
+            "test": "Wilcoxon signed-rank" + (" (one sample vs mu)" if one_sample else " (paired)"),
+            "statistic": float(res.statistic), "p_value": float(res.pvalue),
             "n": len(d1), "interpretation": _interp_p(float(res.pvalue)),
         }
 
@@ -197,7 +273,8 @@ def run(
         chi2, p, dof, expected = sp.chi2_contingency(table)
         return {
             "test": "Chi-squared test of independence", "statistic": float(chi2), "p_value": float(p),
-            "dof": int(dof), "expected": expected.tolist(), "interpretation": _interp_p(float(p)),
+            "dof": int(dof), "expected": expected.tolist(),
+            "interpretation": _interp_p(float(p), what="association"),
         }
 
     if test == "fisher_exact":
@@ -207,32 +284,37 @@ def run(
         odds_ratio, p = sp.fisher_exact(table)
         return {
             "test": "Fisher's exact test", "odds_ratio": float(odds_ratio), "p_value": float(p),
-            "interpretation": _interp_p(float(p)),
+            "interpretation": _interp_p(float(p), what="association"),
         }
 
     if test in ("pearson", "spearman", "linregress"):
         d1 = _get_data(data, catalog, dataset, column, where)
         d2 = _get_data(data2, catalog, dataset, column2, where)
         if len(d1) != len(d2):
-            raise StatsError("correlation/regression needs equal-length samples")
+            raise StatsError(f"{test} needs two equal-length samples (x in data/column, y in data2/column2); got {len(d1)} and {len(d2)}")
+        _need(d1, 3, test)
         if test == "pearson":
             r, p = sp.pearsonr(d1, d2)
             return {"test": "Pearson correlation", "r": float(r), "p_value": float(p), "n": len(d1),
-                    "interpretation": _interp_p(float(p))}
+                    "interpretation": _interp_p(float(p), what="correlation")}
         if test == "spearman":
             rho, p = sp.spearmanr(d1, d2)
             return {"test": "Spearman correlation", "rho": float(rho), "p_value": float(p), "n": len(d1),
-                    "interpretation": _interp_p(float(p))}
+                    "interpretation": _interp_p(float(p), what="correlation")}
         res = sp.linregress(d1, d2)
+        t_crit = sp.t.ppf(1 - (1 - confidence) / 2, len(d1) - 2)
         return {
-            "test": "Linear regression", "slope": float(res.slope), "intercept": float(res.intercept),
+            "test": "Linear regression (least squares, y = slope*x + intercept)",
+            "slope": float(res.slope), "intercept": float(res.intercept),
+            "slope_ci_low": float(res.slope - t_crit * res.stderr),
+            "slope_ci_high": float(res.slope + t_crit * res.stderr),
+            "confidence": confidence,
             "r_squared": float(res.rvalue ** 2), "p_value": float(res.pvalue), "stderr": float(res.stderr),
-            "n": len(d1), "interpretation": _interp_p(float(res.pvalue)),
+            "n": len(d1), "interpretation": _interp_p(float(res.pvalue), what="slope"),
         }
 
     if test == "proportion_ci":
-        if successes is None or trials is None:
-            raise StatsError("proportion_ci needs successes and trials")
+        _check_counts(successes, trials, "proportion_ci")
         lo, hi = _wilson_ci(successes, trials, confidence)
         return {
             "test": "Wilson score confidence interval", "proportion": successes / trials,
@@ -241,6 +323,7 @@ def run(
 
     if test == "normal_ci":
         d = _get_data(data, catalog, dataset, column, where)
+        _need(d, 2, "normal_ci")
         arr = np.asarray(d, dtype=float)
         mean = float(np.mean(arr))
         sem = sp.sem(arr)
@@ -251,16 +334,24 @@ def run(
         }
 
     if test == "binom_test":
-        if successes is None or trials is None:
-            raise StatsError("binom_test needs successes and trials")
+        _check_counts(successes, trials, "binom_test")
+        if not 0 <= p0 <= 1:
+            raise StatsError("p0 must be a probability between 0 and 1")
         res = sp.binomtest(successes, trials, p0)
         return {
             "test": "Binomial test", "p_value": float(res.pvalue), "successes": successes,
             "trials": trials, "p0": p0, "proportion": successes / trials,
-            "interpretation": _interp_p(float(res.pvalue)),
+            "interpretation": _interp_p(float(res.pvalue), what="proportion"),
         }
 
     raise StatsError(f"unhandled test: {test}")
+
+
+def _check_counts(successes: Optional[int], trials: Optional[int], test: str) -> None:
+    if successes is None or trials is None:
+        raise StatsError(f"{test} needs successes and trials (whole numbers), e.g. successes=42, trials=100")
+    if trials <= 0 or successes < 0 or successes > trials:
+        raise StatsError(f"{test} needs 0 <= successes <= trials and trials > 0; got {successes}/{trials}")
 
 
 def _wilson_ci(successes: int, trials: int, confidence: float) -> tuple[float, float]:
