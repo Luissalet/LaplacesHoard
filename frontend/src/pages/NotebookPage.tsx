@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Play } from "lucide-react";
-import { api, type Cell } from "../api";
+import { api, ApiError, type Cell } from "../api";
 import type { DictKey } from "../i18n";
 import { CiteBadge, ConfirmDelete, ErrorBlock, Latex, VerifiedBadge, copyCite, fmtNum } from "../components/ResultView";
 
@@ -22,6 +22,7 @@ export function NotebookPage({ t }: { t: T }) {
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const [addError, setAddError] = useState<string | null>(null);
 
   useEffect(() => {
     api.cells().then((r) => {
@@ -33,10 +34,16 @@ export function NotebookPage({ t }: { t: T }) {
   async function addCell() {
     if (!input.trim() || busy) return;
     setBusy(true);
+    setAddError(null);
     try {
+      // the backend always answers 200 with an error-shaped result for a
+      // bad expression; a thrown error here means the request itself
+      // failed (network, or a genuine server bug) and must still be shown
       const cell = await api.createCell(engine, input.trim());
       setCells((c) => [...c, cell]);
       setInput("");
+    } catch (e) {
+      setAddError(e instanceof ApiError ? e.message : String(e));
     } finally {
       setBusy(false);
     }
@@ -78,6 +85,7 @@ export function NotebookPage({ t }: { t: T }) {
             {t("notebook_add_cell")}
           </button>
         </div>
+        {addError && <ErrorBlock message={addError} />}
       </div>
 
       <div style={{ marginTop: 16 }}>
@@ -107,6 +115,7 @@ function CellCard({ cell, onDelete, t }: { cell: Cell; onDelete: (id: number) =>
       </div>
       {result && isError && <ErrorBlock message={String((result as { message?: string }).message ?? "error")} />}
       {result && !isError && <CellResult result={result} t={t} />}
+      {!result && <ErrorBlock message={t("notebook_no_result")} />}
     </div>
   );
 }

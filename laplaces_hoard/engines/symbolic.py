@@ -426,6 +426,13 @@ def _split_args(text: str) -> list[str]:
     return [p for p in parts if p]
 
 
+def _cell_int(text: str, usage: str) -> int:
+    try:
+        return int(text.strip())
+    except ValueError as exc:
+        raise SymbolicError(f"{usage}: the order must be a whole number, got {text!r}") from exc
+
+
 def parse_cell(text: str) -> tuple[str, dict[str, Any]]:
     """Notebook shorthand for the math engine, e.g. `factor(x**3 - x)`,
     `diff(sin(x)*x, x)`, `integrate(x**2, x, 0, 2)`, `x**2 = 4` (solve) or a
@@ -449,7 +456,7 @@ def parse_cell(text: str) -> tuple[str, dict[str, Any]]:
         if len(args) > 1:
             payload["variable"] = args[1]
         if op == "diff" and len(args) > 2:
-            payload["order"] = int(args[2])
+            payload["order"] = _cell_int(args[2], "diff(expr, var, order)")
         if op == "integrate" and len(args) > 3:
             payload["lower"], payload["upper"] = args[2], args[3]
         if op == "limit":
@@ -458,7 +465,7 @@ def parse_cell(text: str) -> tuple[str, dict[str, Any]]:
             if len(args) > 2:
                 payload["point"] = args[2]
             if len(args) > 3:
-                payload["order"] = int(args[3])
+                payload["order"] = _cell_int(args[3], "series(expr, var, point, order)")
         return op, payload
     if re.search(r"<|>", text):
         return "inequality", {"expression": text}

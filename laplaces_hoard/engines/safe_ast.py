@@ -14,6 +14,7 @@ engine (adds free symbols and `==`/`<`/`>` as Eq/relational).
 from __future__ import annotations
 
 import ast
+import inspect
 from typing import Callable, Optional
 
 import sympy
@@ -369,7 +370,17 @@ def parse_expression(
                 return FUNCTIONS[name](*args)
             except UnsafeExpressionError:
                 raise
-            except (TypeError, ValueError, AttributeError) as exc:
+            except TypeError as exc:
+                # never leak the private helper's name (e.g. "_pct" for
+                # pct()) in the error a person or model sees
+                try:
+                    params = str(inspect.signature(FUNCTIONS[name]))
+                except (TypeError, ValueError):
+                    params = ""
+                raise UnsafeExpressionError(
+                    f"wrong number of arguments for {name}{params}: got {len(args)}"
+                ) from exc
+            except (ValueError, AttributeError) as exc:
                 raise UnsafeExpressionError(f"wrong arguments for {name}(): {exc}") from exc
         if isinstance(node, (ast.Tuple, ast.List)):
             return [visit(e) for e in node.elts]

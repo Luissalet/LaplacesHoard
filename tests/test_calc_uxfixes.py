@@ -1,0 +1,38 @@
+"""Regressions from the first user walk (docs/USABILITY_REPORT.md): calc's
+handling of ambiguous numbers and its error messages."""
+import pytest
+
+from laplaces_hoard.engines import calc
+from laplaces_hoard.engines.safe_ast import UnsafeExpressionError
+
+
+def test_dotted_thousands_look_alike_gets_a_warning_not_a_silent_answer():
+    r = calc.compute("1.000 * 3")
+    assert r["exact"] == "3"  # the value is still exact Python/Sympy semantics
+    assert "warning" in r
+    assert "1.000" in r["warning"] and "1000" in r["warning"]
+
+
+def test_a_real_decimal_number_never_gets_the_thousands_warning():
+    r = calc.compute("3.5 * 2")
+    assert "warning" not in r
+    r2 = calc.compute("3.14159")
+    assert "warning" not in r2
+
+
+def test_decimal_comma_parsed_as_a_list_gives_a_decimal_hint():
+    with pytest.raises(UnsafeExpressionError, match="use '.' instead of ','"):
+        calc.compute("3,5 + 2")
+
+
+def test_wrong_argument_count_never_leaks_the_internal_helper_name():
+    with pytest.raises(UnsafeExpressionError) as exc_info:
+        calc.compute("pct(21, 1234, 56)")
+    message = str(exc_info.value)
+    assert "_pct" not in message
+    assert "pct(" in message
+
+
+def test_implicit_multiplication_gets_a_hint():
+    with pytest.raises(UnsafeExpressionError, match=r"write '\*' explicitly"):
+        calc.compute("5x")

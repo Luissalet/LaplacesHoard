@@ -11,7 +11,7 @@ Every literal in the input is converted to an exact SymPy `Rational` /
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, Optional
 
 import sympy
 
@@ -34,8 +34,31 @@ def _parse_hint(expression: str) -> str:
         hints.append("use '.' as the decimal separator (3.5, not 3,5)")
     if re.search(r"\d\s*[x×]\s*\d", expression):
         hints.append("use * for multiplication")
+    if re.search(r"\d[A-Za-z(]", expression):
+        hints.append("write '*' explicitly for multiplication (5*x, 2*sqrt(3)), not '5x'")
     hints.append("write it in Python-like syntax, e.g. 2**10 or 2^10, sqrt(2), 1/3 + 1/6")
     return "; ".join(hints)
+
+
+_THOUSANDS_DOT = re.compile(r"(?<!\d)(\d{1,3})\.(\d{3})(?!\d)")
+
+
+def _thousands_separator_warning(expression: str) -> Optional[str]:
+    """Flag a number like "1.000" that parses fine as 1.0 but might have
+    been meant as one thousand (a dot used as a thousands separator).
+
+    Never changes the result - calc's numbers are exact and unambiguous
+    once parsed - only adds a warning next to a value someone might
+    misread."""
+    matches = _THOUSANDS_DOT.findall(expression)
+    if not matches:
+        return None
+    a, b = matches[0]
+    examples = ", ".join(f"{x}.{y}" for x, y in matches[:3])
+    return (
+        f"'{examples}' was read as a decimal number ({a}.{b} = {a}.{b}, not {a}{b}); "
+        f"write {a}{b} instead of {a}.{b} if you meant it as a thousands separator"
+    )
 
 
 def format_decimal(value: sympy.Expr, precision: int) -> str:
@@ -73,6 +96,12 @@ def compute(expression: str, precision: int = 15) -> dict[str, Any]:
         return _raw_result(expression, raw, precision)
 
     if isinstance(result, list):
+        if re.search(r"\d,\d", expression):
+            raise UnsafeExpressionError(
+                "calc evaluates one expression, not a list; if this was meant to be one decimal "
+                "number, use '.' instead of ',' (3.5, not 3,5) - a comma between digits is read as "
+                "separating two values"
+            )
         raise UnsafeExpressionError(
             "calc evaluates one expression, not a list; for several values use sum(...), mean(...), "
             "max(...) etc., or make one call per value"
@@ -135,6 +164,9 @@ def compute(expression: str, precision: int = 15) -> dict[str, Any]:
         out["exact_truncated"] = True
         if digit_count is not None:
             out["exact_digit_count"] = digit_count
+    warning = _thousands_separator_warning(expression)
+    if warning:
+        out["warning"] = warning
     return out
 
 

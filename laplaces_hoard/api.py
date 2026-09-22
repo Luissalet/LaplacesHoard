@@ -628,6 +628,14 @@ def create_app(
             error_result = {"error": _error_code(exc), "message": str(exc)}
             db.update_cell(state.conn, cell["id"], result=error_result)
             cell["result"] = error_result
+        except Exception as exc:  # noqa: BLE001 - a cell must never come back as a raw 500
+            log.exception("notebook cell (%s) failed unexpectedly: %r", body.engine, body.input)
+            error_result = {
+                "error": "internal_error",
+                "message": f"unexpected failure evaluating this cell: {type(exc).__name__}: {exc}"[:500],
+            }
+            db.update_cell(state.conn, cell["id"], result=error_result)
+            cell["result"] = error_result
         return cell
 
     @app.delete("/api/cells/{cell_id}")
