@@ -140,7 +140,8 @@ def test_ask_errors_clearly_when_the_model_does_not_answer_in_sql(client_with_li
 
 def test_ask_is_honestly_unavailable_with_no_model_resolved(data_dir: Path, sample_csv: Path):
     def handler(request: httpx.Request) -> httpx.Response:
-        # every probe (Faustus, llama.cpp, Ollama, any OpenAI-compatible server...) gets a
+        # every probe (Faustus, llama.cpp, Ollama, another OpenAI-compatible
+        # server...) gets a
         # uniform "nothing here" 404 - never a real socket, still offline.
         return httpx.Response(404, json={})
 

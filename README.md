@@ -6,7 +6,7 @@
 
 **A local calculator, symbolic-math, units, dates, statistics and SQL-over-files engine for a local language model: exact where exactness is possible, and every computation logged with an id the model cites and a person can re-run.**
 
-[Español](README.es.md) · [Run locally](#run-locally-on-windows) · [Connect an AI](docs/MCP.md) · [Portfolio](https://luissalet.github.io/Portfolio/#projects)
+[Español](README.es.md) · [Quick start](#run-locally-on-windows) · [Connect to Faustus](#connect-it-to-faustus) · [MCP reference](docs/MCP.md) · [Portfolio](https://luissalet.github.io/Portfolio/#projects)
 
 ![Laplace's Hoard data view: a sales dataset profiled column by column, with a grouped SQL query and its result](docs/media/data.png)
 *Actual application, synthetic demo data (`--demo`), real queries.*
@@ -65,7 +65,8 @@ agent over MCP, are written up in [docs/USE_CASES.md](docs/USE_CASES.md)
 
 Laplace's Hoard vendors Hoard Link, a small resolver shared with the
 other Hoard apps, so "Ask your data" uses whichever language model
-Faustus or a local Ollama/llama.cpp server already has loaded,
+Faustus or another local OpenAI-compatible server (Ollama, llama.cpp, or
+similar) already has loaded,
 instead of loading a copy of its own. Resolution order: explicit override
 in Settings, then Faustus's own model registry, then a shared server found
 on loopback. Everything else in this app - calc, math, units, dates, every
@@ -180,3 +181,26 @@ rejects DNS rebinding (wrong `Host`) and cross-site writes (foreign
 `Origin` or `Sec-Fetch-Site: cross-site`) on every route. The Windows
 launch scripts were exercised with PowerShell 7 on Linux; the test suite
 runs on Linux here and is configured for Windows in CI.
+
+## Roadmap / known limits
+
+- A few fixed UI strings stay in English even in the Spanish interface
+  (engine messages, test interpretations, weekday names, chart-kind
+  labels); translating them is the next UI pass.
+- A dataset registered by mistake cannot be removed from the UI or API
+  yet, only re-registered over.
+- Adding a file means typing or pasting its path; there is no file
+  picker or drag-and-drop yet.
+- The MCP `list_tools` payload is sizeable (about 19 KB before the first
+  call), which is fine at a 32k context window but heavy at 8k;
+  shortening the descriptions is planned.
+- The dataset and profile cards can overflow horizontally on very narrow
+  windows, and a chart shows a missing category as `null` instead of
+  hiding it.
+
+See [docs/USABILITY_REPORT.md](docs/USABILITY_REPORT.md) for the full
+list of open items and how each one was found.
+
+## License
+
+MIT - see [LICENSE](LICENSE).

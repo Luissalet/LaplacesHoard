@@ -6,7 +6,7 @@
 
 **Un motor local de cálculo exacto, matemática simbólica, unidades, fechas, estadística y SQL sobre archivos para un modelo de lenguaje local: exacto cuando se puede, y con cada cálculo registrado con un id que el modelo cita y una persona puede volver a ejecutar.**
 
-[English](README.md) · [Ejecutar en local](#ejecutar-en-local-en-windows) · [Conectar una IA](docs/MCP.md) · [Portfolio](https://luissalet.github.io/Portfolio/#projects)
+[English](README.md) · [Ejecutar en local](#ejecutar-en-local-en-windows) · [Conectar con Faustus](#conectarlo-a-faustus) · [Referencia MCP](docs/MCP.md) · [Portfolio](https://luissalet.github.io/Portfolio/#projects)
 
 ![Vista de datos de Laplace's Hoard: un dataset de ventas perfilado columna a columna, con una consulta SQL agrupada y su resultado](docs/media/data.png)
 *Aplicación real, datos sintéticos de demostración (`--demo`), consultas reales.*
@@ -70,9 +70,10 @@ como por un agente por MCP, están descritos en
 
 Laplace's Hoard incluye Hoard Link, un pequeño resolutor compartido con las
 demás aplicaciones locales de la familia Hoard, para que "Pregunta a tus datos"
-use el modelo de lenguaje que Faustus o un servidor local de Ollama,
-llama.cpp u otro servidor compatible ya tenga cargado, en lugar de cargar una copia
-propia. Orden de resolución: configuración manual en Ajustes, después el
+use el modelo de lenguaje que Faustus o un servidor local compatible con
+la API de OpenAI (Ollama, llama.cpp u otro similar) ya tenga cargado, en
+lugar de cargar una copia propia. Orden de resolución: configuración
+manual en Ajustes, después el
 propio registro de modelos de Faustus, y por último un servidor compartido
 encontrado en loopback. Todo lo demás en esta aplicación —calc, math,
 unidades, fechas, cada herramienta `data_*`— funciona por completo sin
@@ -197,3 +198,27 @@ nunca modifica el original. Un middleware rechaza el DNS rebinding
 ajeno o `Sec-Fetch-Site: cross-site`) en todas las rutas. Los scripts de
 arranque de Windows se han ejecutado con PowerShell 7 en Linux; la batería
 de tests se ejecuta aquí en Linux y está configurada para Windows en la CI.
+
+## Hoja de ruta / límites conocidos
+
+- Algunos textos fijos de la interfaz siguen en inglés incluso en la
+  versión española (mensajes de los motores, interpretaciones de los
+  tests, nombres de los días, etiquetas de tipo de gráfico); traducirlos
+  es el siguiente paso en la interfaz.
+- Un dataset registrado por error no se puede borrar todavía desde la
+  interfaz ni la API, solo volver a registrarlo encima.
+- Añadir un archivo significa escribir o pegar su ruta; todavía no hay
+  selector de archivos ni arrastrar y soltar.
+- La respuesta de `list_tools` en MCP pesa bastante (unos 19 KB antes de
+  la primera llamada), lo cual va bien con una ventana de contexto de
+  32k pero pesa con 8k; acortar las descripciones está previsto.
+- Las tarjetas de dataset y de perfil pueden desbordar horizontalmente en
+  ventanas muy estrechas, y un gráfico muestra una categoría ausente como
+  `null` en lugar de ocultarla.
+
+El listado completo de asuntos abiertos y cómo se encontraron está en
+[docs/USABILITY_REPORT.md](docs/USABILITY_REPORT.md).
+
+## Licencia
+
+MIT - ver [LICENSE](LICENSE).
