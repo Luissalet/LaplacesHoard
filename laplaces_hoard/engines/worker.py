@@ -14,11 +14,51 @@ call — the worker "self-heals" instead of wedging the app.
 from __future__ import annotations
 
 import multiprocessing as mp
+import sys
 import threading
+from pathlib import Path
 from typing import Any, Callable, Optional
 
 _CTX = mp.get_context("spawn")
 STARTUP_TIMEOUT_S = 60.0
+
+
+def _windows_console_less() -> bool:
+    """True on Windows when this process has no visible console window.
+
+    multiprocessing starts workers with python.exe and creation flags 0: a
+    console-less parent (started detached or with CREATE_NO_WINDOW by a
+    launcher) would make Windows open a new, visible console for every
+    worker. In that case the worker runs under pythonw.exe instead.
+    """
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        get_console_window = ctypes.WinDLL("kernel32", use_last_error=True).GetConsoleWindow
+        get_console_window.argtypes = []
+        get_console_window.restype = wintypes.HWND  # pointer-sized: 64-bit safe
+        return not get_console_window()
+    except (OSError, AttributeError):
+        return False
+
+
+def _configure_executable() -> None:
+    if not _windows_console_less():
+        return
+    # the *base* interpreter, as multiprocessing itself does for venvs: the venv
+    # launcher stub would sit between us and the real process and break the
+    # handle duplication the spawn protocol relies on. The venv's packages are
+    # still found because spawn sends the parent's sys.path to the child.
+    base = Path(getattr(sys, "_base_executable", sys.executable))
+    pythonw = base.with_name("pythonw.exe")
+    if pythonw.exists():
+        _CTX.set_executable(str(pythonw))
+
+
+_configure_executable()
 
 
 class WorkerTimeout(RuntimeError):
