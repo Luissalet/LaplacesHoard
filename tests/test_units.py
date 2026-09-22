@@ -55,8 +55,13 @@ def test_float_noise_is_rounded_away():
     assert units.convert("1 mile", "km")["formatted"] == "1.609344 km"
 
 
-def test_runaway_units_expression_times_out():
-    from laplaces_hoard.engines import sandbox
+def test_memory_bomb_exponents_are_refused():
+    import time
 
-    with pytest.raises(units.UnitsError, match="did not finish"):
-        sandbox.run("units.convert", {"quantity": "10**10**10 m", "to": "km"}, error_cls=units.UnitsError, timeout=1)
+    start = time.monotonic()
+    for bad in ("10**10**10 m", "2**(10**9) m", "10^1000 m"):
+        with pytest.raises(units.UnitsError, match="exponent"):
+            units.convert(bad, "km")
+    assert time.monotonic() - start < 1
+    assert units.convert("10**6 m**2", "km**2")["to_magnitude"] == pytest.approx(1.0)
+    assert units.convert("9.81 m/s^2", "ft/s**2")["to_magnitude"] == pytest.approx(32.185, abs=1e-3)

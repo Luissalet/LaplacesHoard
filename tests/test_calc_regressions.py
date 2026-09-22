@@ -74,7 +74,7 @@ def test_huge_exact_results_are_capped():
 def test_runaway_expression_times_out_and_worker_recovers():
     start = time.monotonic()
     with pytest.raises(calc.CalcError, match="did not finish"):
-        sandbox.run("calc", {"expression": "9**9**9**9"}, error_cls=calc.CalcError, timeout=1)
+        sandbox.run("calc", {"expression": "nextprime(10**3000)"}, error_cls=calc.CalcError, timeout=1)
     assert time.monotonic() - start < 8
     r = sandbox.run("calc", {"expression": "0.1 + 0.2"}, error_cls=calc.CalcError)
     assert r["exact"] == "3/10"
@@ -100,3 +100,15 @@ def test_number_theory_helpers_must_be_the_whole_expression():
     # used to silently drop the "+ 1" and answer isprime(97)
     with pytest.raises(UnsafeExpressionError, match="whole expression"):
         calc.compute("isprime(97) + 1")
+
+
+def test_memory_bomb_powers_are_refused_before_allocating():
+    start = time.monotonic()
+    with pytest.raises(UnsafeExpressionError, match="too large"):
+        calc.compute("2**(10**10)")
+    with pytest.raises(UnsafeExpressionError, match="too large"):
+        calc.compute("9**9**9")
+    assert time.monotonic() - start < 1
+    # big but reasonable powers still work exactly
+    assert calc.compute("2**100000")["exact_digit_count"] == 30103
+    assert calc.compute("(1/2)**3")["exact"] == "1/8"

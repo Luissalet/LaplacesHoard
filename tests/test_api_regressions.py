@@ -101,7 +101,7 @@ def test_app_writes_a_rotating_log(client, data_dir):
 
 
 def test_calc_runs_in_the_worker_with_a_timeout(client):
-    r = client.post("/api/agent/calc", json={"expression": "9**9**9**9"})
+    r = client.post("/api/agent/calc", json={"expression": "nextprime(10**3000)"})
     assert r.status_code == 400
     assert r.json()["error"] == "calc"
     assert "did not finish" in r.json()["message"]

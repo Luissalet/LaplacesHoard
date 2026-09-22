@@ -187,6 +187,28 @@ _ALLOWED_NODES = (
     ast.NotEq,
 )
 
+MAX_EXACT_POWER_BITS = 20_000_000  # ~6 million decimal digits
+
+
+def _safe_pow(a, b):
+    """a ** b, refusing exact powers whose result alone would need gigabytes.
+
+    A timeout is not enough here: 2**(10**10) allocates 1.25 GB before any
+    timer fires. Symbolic or float powers are unaffected.
+    """
+    if getattr(a, "is_Rational", False) and getattr(b, "is_Integer", False) and abs(a) not in (0, 1):
+        import math as _m
+
+        p, q = abs(a.p), a.q
+        bits = abs(int(b)) * max(_m.log2(p) if p > 1 else 0.0, _m.log2(q) if q > 1 else 0.0)
+        if bits > MAX_EXACT_POWER_BITS:
+            raise UnsafeExpressionError(
+                f"the exact result of this power would have about {int(bits * 0.30103):,} digits; "
+                "that is too large to compute exactly (use log10 of it, e.g. b*log10(a), instead)"
+            )
+    return a ** b
+
+
 _BINOPS = {
     ast.Add: lambda a, b: a + b,
     ast.Sub: lambda a, b: a - b,
@@ -194,9 +216,9 @@ _BINOPS = {
     ast.Div: lambda a, b: a / b,
     ast.FloorDiv: lambda a, b: sympy.floor(a / b),
     ast.Mod: lambda a, b: sympy.Mod(a, b),
-    ast.Pow: lambda a, b: a ** b,
+    ast.Pow: _safe_pow,
     # `^` means power to every human and every calculator; nobody asks for XOR here.
-    ast.BitXor: lambda a, b: a ** b,
+    ast.BitXor: _safe_pow,
 }
 
 _CMPOPS = {

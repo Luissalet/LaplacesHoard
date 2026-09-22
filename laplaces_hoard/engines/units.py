@@ -50,8 +50,23 @@ def _reject_currency(text: str) -> None:
         )
 
 
+_POWER = re.compile(r"(\*\*|\^)\s*(\S+)")
+
+
+def _guard_powers(text: str) -> None:
+    """Pint evaluates `**` with Python ints: "10**10**10 m" would allocate gigabytes
+    before any timeout fires. Unit powers are small (m**3, s^-2, 10**6), so any
+    exponent that is not a plain number up to 100 is refused."""
+    for _, token in _POWER.findall(text):
+        token = token.strip("()")
+        m = re.match(r"^[-+]?\d+(\.\d+)?", token)
+        if not m or abs(float(m.group(0))) > 100 or _POWER.search(token[m.end():]):
+            raise UnitsError(f"exponent {token!r} is not supported here: use plain powers up to 100, e.g. m**3 or 10**6")
+
+
 def _parse_quantity(text: str) -> "pint.Quantity":
     _reject_currency(text)
+    _guard_powers(text)
     text = text.strip()
     matches = _COMPOUND_TOKEN.findall(text)
     reconstructed = " ".join(f"{n} {u}".strip() for n, u in matches)
@@ -70,6 +85,7 @@ def _parse_quantity(text: str) -> "pint.Quantity":
 def convert(quantity: str, to: str) -> dict[str, Any]:
     q = _parse_quantity(quantity)
     _reject_currency(to)
+    _guard_powers(to)
     try:
         target = _ureg.Unit(to)
     except Exception as exc:  # noqa: BLE001
@@ -101,6 +117,7 @@ def convert(quantity: str, to: str) -> dict[str, Any]:
 
 def check(expression: str) -> dict[str, Any]:
     """Check dimensional consistency, e.g. `"3 m/s * 2 s" -> length` OK, wrong units flagged."""
+    _guard_powers(expression)
     try:
         q = _ureg.parse_expression(expression)
     except pint.DimensionalityError as exc:
