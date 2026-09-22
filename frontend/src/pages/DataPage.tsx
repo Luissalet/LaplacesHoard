@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { BarChart3, Database, Download, Play, Plus, Sparkles, Table2 } from "lucide-react";
 import { api, ApiError, type AskResult, type ColumnProfile, type DatasetDetail, type DatasetSummary, type QueryResult } from "../api";
-import type { DictKey } from "../i18n";
+import { detectLang, type DictKey } from "../i18n";
 import { CiteBadge, ErrorBlock, copyCite, fmtNum } from "../components/ResultView";
 
 type T = (k: DictKey) => string;
@@ -312,7 +312,7 @@ function DatasetPanel({ detail, t }: { detail: DatasetDetail; t: T }) {
     if (!ranSql) return;
     try {
       // the whole result, not just the rows on screen
-      const blob = await api.exportCsv(ranSql);
+      const blob = await api.exportCsv(ranSql, detectLang());
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;

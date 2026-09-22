@@ -242,11 +242,12 @@ export const api = {
     post<Record<string, unknown>>("/api/ui/data_register", { path, name, options }),
   query: (sql: string, limit = 50) => post<QueryResult>("/api/ui/data_query", { sql, limit }),
   chart: (payload: Record<string, unknown>) => post<ChartResult>("/api/ui/data_chart", payload),
-  exportCsv: async (sql: string): Promise<Blob> => {
+  exportCsv: async (sql: string, lang: "en" | "es" = "en"): Promise<Blob> => {
+    // a Spanish Excel expects ';' fields and a ',' decimal point
     const res = await fetch("/api/export/csv", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sql }),
+      body: JSON.stringify({ sql, lang }),
     });
     if (!res.ok) {
       let message = res.statusText;

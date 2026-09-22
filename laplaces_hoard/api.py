@@ -218,6 +218,14 @@ class DataQueryBody(BaseModel):
     limit: int = 50
 
 
+class ExportCsvBody(BaseModel):
+    sql: str
+    # A Spanish Excel expects ';' between fields (it treats ',' as the
+    # decimal point) and a comma decimal point in numbers; opening a plain
+    # ',' + '.' CSV there puts everything in one column.
+    lang: Literal["en", "es"] = "en"
+
+
 class DataChartBody(BaseModel):
     sql: str
     kind: str
@@ -589,7 +597,7 @@ def create_app(
         return ui(engine_name, item["operation"], input_data, fn)
 
     @app.post("/api/export/csv")
-    def export_csv(body: DataQueryBody):
+    def export_csv(body: ExportCsvBody):
         """The complete result of a gated read-only query as CSV (the UI grid shows at most 1000 rows)."""
         holder: dict[str, Any] = {}
 
@@ -598,13 +606,23 @@ def create_app(
             holder.update(r)
             return {"row_count": r["row_count"], "truncated": r["truncated"]}
 
-        _record("data", "export_csv", {"sql": body.sql}, "ui", _run)
+        _record("data", "export_csv", {"sql": body.sql, "lang": body.lang}, "ui", _run)
         buf = io.StringIO()
         names = [c["name"] for c in holder["columns"]]
-        writer = csv.writer(buf, lineterminator="\n")
+        es = body.lang == "es"
+        writer = csv.writer(buf, delimiter=";" if es else ",", lineterminator="\n")
         writer.writerow(names)
         for row in holder["rows"]:
-            writer.writerow(["" if row[n] is None else row[n] for n in names])
+            out_row = []
+            for n in names:
+                v = row[n]
+                if v is None:
+                    out_row.append("")
+                elif es and isinstance(v, float):
+                    out_row.append(str(v).replace(".", ","))
+                else:
+                    out_row.append(v)
+            writer.writerow(out_row)
         # BOM so Excel on Windows opens UTF-8 (accents) correctly
         return Response("\ufeff" + buf.getvalue(), media_type="text/csv; charset=utf-8",
                         headers={"Content-Disposition": 'attachment; filename="query.csv"'})

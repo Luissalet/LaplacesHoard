@@ -242,6 +242,23 @@ def test_csv_export_returns_the_whole_result(client, tmp_path):
     assert bad.status_code == 400 and bad.json()["error"] == "sql_gate"
 
 
+def test_csv_export_uses_spanish_excel_conventions_when_asked(client, tmp_path):
+    import csv as _csv
+
+    path = tmp_path / "t.csv"
+    with path.open("w", newline="", encoding="utf-8") as fh:
+        w = _csv.writer(fh)
+        w.writerow(["n", "amount"])
+        w.writerow([1, 1234.5])
+    client.post("/api/ui/data_register", json={"path": str(path)})
+    r = client.post("/api/export/csv", json={"sql": "SELECT * FROM t", "lang": "es"})
+    assert r.status_code == 200
+    text = r.content.decode("utf-8-sig")
+    lines = text.strip().split("\n")
+    assert lines[0] == "n;amount"
+    assert lines[1] == "1;1234,5"
+
+
 def test_logged_inputs_skip_defaults_and_still_rerun(client):
     s = client.post("/api/agent/stats", json={"test": "describe", "data": [1, 2, 3, 4]}).json()
     d = client.post("/api/agent/date_calc", json={"operation": "business_days", "start": "2026-09-21",
