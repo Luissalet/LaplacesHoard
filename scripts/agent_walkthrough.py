@@ -116,27 +116,30 @@ async def uc_bank(w: Walker, tools: list, files: Path) -> None:
             name = "movimientos_b"
         else:
             name = res["name"]
+            w.say(f"numbers_converted: {res.get('numbers_converted')}")
     ok, res, _ = await w.call("data_describe", {"name": name})
     cols = {c["name"]: c["type"] for c in res["columns"]} if ok else {}
     w.say(f"columns: {cols}")
     amount = next((c for c in cols if c.lower().startswith("importe")), "Importe (€)")
     cat = next((c for c in cols if c.lower().startswith("categor")), "Categoría")
-    # what a model writes first: a plain SUM
-    ok, res, text = await w.call("data_query", {"sql": f'SELECT SUM("{amount}") AS total FROM {name} WHERE "{cat}" = \'Supermercado\''})
-    if not ok or cols.get(amount) == "VARCHAR":
-        w.say(f"'{amount}' is text ({cols.get(amount)}) - '-1.234,56'. The model has to repair it in SQL itself")
-        ok, res, text = await w.call("data_query", {"sql": f'SELECT SUM(CAST("{amount}" AS DOUBLE)) AS total FROM {name}'})
+    # what a model writes first: a plain SUM, no conversion
+    w.say(f"'{amount}' is {cols.get(amount)}; the model writes the obvious SQL")
+    ok, res, _ = await w.call("data_query", {"sql": (
+        f"SELECT -SUM(\"{amount}\") AS gasto, COUNT(*) AS n FROM {name} "
+        f"WHERE \"{cat}\" = 'Supermercado' AND year(\"Fecha operación\") = 2025")})
+    if not ok:
+        w.say("plain SUM failed: the model has to repair '-1.234,56' text in SQL itself")
         fixed = f"CAST(replace(replace(\"{amount}\", '.', ''), ',', '.') AS DECIMAL(12,2))"
         ok, res, _ = await w.call("data_query", {"sql": (
-            f"SELECT -SUM({fixed}) AS gasto, COUNT(*) AS n, COUNT(DISTINCT month(\"Fecha operación\")) AS meses "
-            f"FROM {name} WHERE \"{cat}\" = 'Supermercado' AND year(\"Fecha operación\") = 2025")})
+            f"SELECT -SUM({fixed}) AS gasto, COUNT(*) AS n FROM {name} "
+            f"WHERE \"{cat}\" = 'Supermercado' AND year(\"Fecha operación\") = 2025")})
     if ok and res.get("rows"):
         row = res["rows"][0]
         gasto = row.get("gasto") if isinstance(row, dict) else row[0]
         q_cite = res["cite"]
         ok, r1, _ = await w.call(pick(tools, "calcular", "media"), {"expression": f"{gasto} / 12"})
         ok2, r2, _ = await w.call("data_query", {"sql": (
-            f"SELECT SUM(CAST(replace(replace(\"{amount}\", '.', ''), ',', '.') AS DECIMAL(12,2))) AS nomina "
+            f"SELECT SUM(\"{amount}\") AS nomina "
             f"FROM {name} WHERE \"{cat}\" = 'Nómina' AND year(\"Fecha operación\") = 2025")})
         if ok2 and r2.get("rows"):
             nom = r2["rows"][0].get("nomina") if isinstance(r2["rows"][0], dict) else r2["rows"][0][0]
@@ -149,7 +152,8 @@ async def uc_bank(w: Walker, tools: list, files: Path) -> None:
     await w.call("calc", {"expression": "1.234,56 * 0,21"})
     ok, res, _ = await w.call("calc", {"expression": "1.000 * 3"})
     if ok:
-        w.say(f"'1.000 * 3' (a Spaniard means 3000) returned {res.get('decimal')} with no warning")
+        w.say(f"'1.000 * 3' (a Spaniard means 3000) returned {res.get('decimal')}; "
+              f"warning: {res.get('warning') or 'NONE'}")
 
 
 async def uc_jobs(w: Walker, tools: list, files: Path) -> None:
@@ -218,7 +222,17 @@ async def uc_funes(w: Walker, tools: list, files: Path) -> None:
         ok, res, text = await w.call(tool, {"sql": sql, "kind": "bar", "x": "category", "y": "horas",
                                             "title": "Horas por categoría"})
         if ok:
-            w.say(f"chart result text: {text[:240]}")
+            w.say(f"chart result text: {text[:400]}")
+            url = next((v for k, v in (res or {}).items() if "url" in k and isinstance(v, str)), None)
+            if url:
+                import urllib.request
+                full = url if url.startswith("http") else w.base_url.rstrip("/") + "/" + url.lstrip("/")
+                try:
+                    with urllib.request.urlopen(full, timeout=10) as resp:
+                        w.say(f"GET {full} -> HTTP {resp.status}, {resp.headers.get('content-type')}, "
+                              f"{len(resp.read()):,} bytes")
+                except Exception as exc:  # noqa: BLE001
+                    w.say(f"GET {full} failed: {exc}")
 
 
 async def uc_daguerre(w: Walker, tools: list, files: Path) -> None:
@@ -244,8 +258,12 @@ async def uc_bench(w: Walker, tools: list, files: Path) -> None:
     if not ok:
         return
     name = res["name"]
-    ok, _, err = await w.call("stats", {"test": "linregress", "dataset": name, "column": "ctx", "column2": "tokens_per_s",
-                                        "where": "model = 'qwen3-27b-q4_k_m'"})
+    ok, lr, err = await w.call("stats", {"test": "linregress", "dataset": name, "column": "ctx", "column2": "tokens_per_s",
+                                         "where": "model = 'qwen3-27b-q4_k_m'"})
+    if ok:
+        w.say(f"linregress: slope={lr.get('slope')} n={lr.get('n')} dropped={lr.get('dropped_null_pairs', lr.get('n_dropped'))} "
+              f"{lr.get('cite')}")
+        await w.call("calc", {"expression": f"{lr.get('slope')} * 1000"})
     if not ok and "equal-length" in err:
         w.say("the error does not say why the lengths differ (NULLs); a model has to guess 'IS NOT NULL'")
         await w.call("stats", {"test": "linregress", "dataset": name, "column": "ctx", "column2": "tokens_per_s",
@@ -289,6 +307,7 @@ async def run(base_url: str, files: Path) -> Walker:
                 first = (t.description or "").strip().splitlines()[0]
                 print(f"  {t.name:14} {len(t.description or ''):5} chars, {len(props):2} params | {first[:90]}")
             w = Walker(session)
+            w.base_url = base_url
             for uc in (uc_bank, uc_jobs, uc_funes, uc_daguerre, uc_bench, uc_errors):
                 try:
                     await uc(w, tools, files)
