@@ -10,10 +10,11 @@ from `scripts/uxtest_data.py`: a Spanish bank export, a Windows-1252
 statement with a preamble, a job-hunt workbook, a writing log, a
 llama.cpp benchmark log, a Funes export and an Daguerre library.
 
-Date of the walk: 2026-09-22, on commit `7236fa5`. **Status: findings
-only.** No blocker stopped the walk (each had a workaround or the walk
-moved on), so no code was changed in this pass. The "Fix" column is the
-plan for the fix pass.
+Date of the walk: 2026-09-22, on commit `7236fa5`. **Status: fix pass
+done**, same day. All 11 blockers and 9 of the 13 annoyances are fixed,
+each with its own regression test; see "Fix pass" below for exactly what
+changed and what was deliberately left. The "Fix" column in each table
+below is now a description of what shipped, not just a plan.
 
 Severity: **blocker** = a wrong number shown as right, or a scenario that
 cannot be finished without knowing the internals; **annoying** = it can be
@@ -69,6 +70,74 @@ marked **(live)**: they must be fixed in the fix pass.
 | C7 | Excel dates | Excel date cells arrive as `TIMESTAMP` (`2026-09-04T00:00:00`) instead of `DATE`. |
 | C8 | Console | "The input spec uses Vega-Lite v5, but the current version of Vega-Lite is v6.4.3" on every chart. |
 | C9 | Notebook | The first-run screen does not point to Data for tables. |
+
+## Fix pass
+
+All 11 blockers (B1-B11) are fixed, each with a dedicated regression
+test, and the test suite grew from 174 to 216 tests (pytest) plus live
+browser/MCP verification for the highest-risk changes. Commits, in order:
+
+| Commit | Fixes |
+| --- | --- |
+| `aa5c972` | B2 (Spanish decimal/thousands separators), B3 (dd/mm/yy dates), B4 (Windows-1252/latin-1 encoding), B9 (re-registering a file: DROP VIEW vs TABLE), B11 (nested-list/BLOB values capped in `data_describe`/`data_query`, with an `UNNEST` hint) |
+| `a074d65` | B5 (decimal-comma quantities in `units_convert`/`units_check`) and A10 (Spanish unit names: metros, kilómetros, millas, pies, libras, kilogramos...) |
+| `c6f875e` | B6 (calc: thousands-separator warning, decimal-comma-in-a-call error message, clean argument-count errors, `5x` → `5*x` hint = A2) and B8 (a notebook cell with a bad symbolic argument no longer disappears with no error) |
+| `f0a20bf` | B1 (`data_chart` no longer sends an unrequested image; `include_image` opt-in; Work Log detail now redraws the chart instead of showing raw JSON) |
+| `d0527ad` | B10 is a separate mcp_server.py type fix (see below); this commit is A1 (NULL pairing in pearson/spearman/linregress/ttest_rel/wilcoxon), A6 (chart category order), A5 (numbers formatted in the UI's own language, not the browser's ambient locale), and the "1 row"/"1 fila" singular |
+| (mcp_server.py, same batch as B1/B6) | B10 (`fisher_exact`/`chi2_contingency` accept a 2×2 table over MCP, not just a flat list) |
+| `35b5aeb` | A8 (Work Log searches as you type, debounced; Enter still works) |
+| `4b61f7c` | A11 (CSV export uses `;` and decimal commas when the UI is in Spanish) |
+| `1769664` | A4 (an Excel title row above the real header is detected and skipped; `skip_rows` still overrides it) |
+| `827a24c` | B7 (Statistics page: `3,5; 4,2; 5,1; 6,0` now parses as 4 values, not 8; a hint explains to use `;`/newlines with decimal commas) — found to still be open during this pass's final review of the original report, fixed and verified live in a real browser (Welch's t-test on that input now reports n1=4, mean1=4.7) |
+
+B10 and B7 were reclassified while executing this pass: B10 was a small
+existing type fix already present as part of the B1/B6 batch's diff to
+`mcp_server.py` and B7 (Statistics page comma-splitting) had not
+actually been fixed yet despite being marked blocker-live; it is now
+fixed in `827a24c`, verified against a running instance with Playwright.
+
+### Left, and why
+
+- **A3** (SQLite BLOB columns shown as Python `repr` text) is only
+  *partially* addressed: `aa5c972` caps the hex preview so a BLOB column
+  can no longer blow up `data_describe`/`SELECT *` output, but it still
+  shows as hex rather than the suggested "binary, N bytes" wording. Left
+  as a cosmetic follow-up: renaming the display is a small change, but
+  picking the right cutover point (when is a short BLOB worth showing at
+  all?) deserves its own look rather than a rushed guess.
+- **A7** (English strings inside the Spanish UI: DuckDB errors, test
+  interpretation sentences, weekday names, notebook pills, chart-kind
+  labels) is left for a dedicated i18n pass. It touches many small
+  strings across every engine and the frontend, several of which are
+  meant to stay in English for the *model* (MCP tool results) while only
+  their *UI* rendering should be Spanish - conflating the two risks
+  breaking agent parsing to fix a cosmetic issue, so it needs its own
+  audit of which strings are model-facing vs. person-facing.
+- **A9** (no dataset removal) needs a new capability (an MCP tool plus a
+  UI action plus a manifest entry), not a fix to existing behaviour, and
+  "never remove or hide an existing capability" for this pass argued for
+  keeping scope to fixes and small additions rather than a new delete
+  path that needs its own safety review (confirmation, whether linked
+  vs. copied files are affected, whether the underlying file is ever
+  touched).
+- **A12** (file picker) is a genuinely large UI feature (upload flow,
+  storage location, drag-and-drop), out of scope for a fix pass.
+- **A13** (tool list token size) was deliberately left alone: shortening
+  MCP tool descriptions risks a small local model failing to *pick* the
+  right tool at all, which is a worse outcome than the extra tokens it
+  costs today. Needs its own measurement (does trimming actually change
+  tool-selection accuracy?) before touching it.
+- All 9 cosmetic items (C1-C9) are unchanged: none of them affect
+  correctness or trust, and this pass prioritised blockers and
+  higher-value annoyances within the time available. C7 (Excel dates
+  arriving as `TIMESTAMP`) and C8 (the Vega-Lite v5-vs-v6 console notice)
+  are the two most worth picking up next, since both are one-line fixes
+  once someone is looking at the surrounding code.
+
+Nothing already working was removed or hidden: every change above is
+additive (new optional parameters default to the old behaviour, e.g.
+`include_image` defaults to `false` but the image is still generated and
+retrievable; `skip_rows` only auto-skips when there is strong evidence).
 
 ## What worked
 
