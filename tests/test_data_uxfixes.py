@@ -195,18 +195,120 @@ def test_excel_skip_rows_option_overrides_auto_detection(tmp_path):
     assert meta["datasets"][0]["columns"] == ["region", "total"]
 
 
-def test_blob_hex_text_is_capped_like_any_other_long_cell(tmp_path):
+def test_sqlite_blob_is_a_real_blob_shown_as_its_size(tmp_path):
+    # a thumbnail BLOB used to arrive as its Python repr text (b"\\x..."),
+    # typed VARCHAR, flooding describe's top values and sample rows
     import sqlite3
 
     db_path = tmp_path / "b.sqlite"
     conn = sqlite3.connect(db_path)
     conn.execute("CREATE TABLE t (id INTEGER, data BLOB)")
     conn.execute("INSERT INTO t VALUES (1, ?)", (b"x" * 5000,))
+    conn.execute("INSERT INTO t VALUES (2, ?)", (bytes(range(256)),))
     conn.commit()
     conn.close()
     cat = Catalog(tmp_path / "data")
     cat.register(str(db_path))
-    profile = cat.describe("b__t")["profile"]["data"]
-    top = profile.get("top_values", [])
-    assert top, "BLOB column should still get a top_values profile"
-    assert all(len(str(v["value"])) < 200 for v in top)
+    d = cat.describe("b__t")
+    profile = d["profile"]["data"]
+    assert profile["type"] == "BLOB"
+    assert "top_values" not in profile
+    assert (profile["bytes_min"], profile["bytes_max"]) == (256, 5000)
+    assert d["sample_rows"][0]["data"] == "<binary, 5,000 bytes>"
+    assert len(json.dumps(d)) < 2000
+    # the bytes themselves survive the import intact
+    full = cat.query_all("SELECT data FROM b__t ORDER BY id")["rows"]
+    assert full[1]["data"] == bytes(range(256)).hex()
+    assert cat.query("SELECT octet_length(data) AS n FROM b__t ORDER BY id")["rows"][0]["n"] == 5000
+
+
+# -- second walk (re-walk after the fix pass) ---------------------------------
+
+def test_spanish_bank_amounts_become_exact_numbers_without_any_option(tmp_path):
+    # the person pastes a path and presses Register: no option to set, and
+    # SUM() must work straight away, exactly (money), not as 1150.4999...
+    p = _write(tmp_path / "movimientos.csv", [
+        "\ufeffFecha;Concepto;Importe (€);Saldo (€)",
+        "01/07/2023;RECIBO ALQUILER;-1.150,00;7.262,37",
+        "02/07/2023;COMPRA;-51,05;7.211,32",
+        "03/07/2023;NOMINA;2.300,10;9.511,42",
+        "04/07/2023;SIN IMPORTE;;9.511,42",
+    ])
+    cat = Catalog(tmp_path / "data")
+    meta = cat.register(str(p))
+    types = {c["name"]: c["type"] for c in meta["columns"]}
+    assert types["Importe (€)"] == "DECIMAL(18,2)"
+    assert types["Saldo (€)"] == "DECIMAL(18,2)"
+    assert types["Concepto"] == "VARCHAR"
+    assert meta["numbers_converted"]["columns"] == ["Importe (€)", "Saldo (€)"]
+    row = cat.query('SELECT SUM("Importe (€)") AS s, COUNT("Importe (€)") AS n FROM movimientos')["rows"][0]
+    assert row["s"] == "1099.05"  # exact decimal, as text like every DECIMAL result
+    assert row["n"] == 3  # the blank amount stays NULL
+
+
+def test_automatic_detection_leaves_ambiguous_or_mixed_text_alone(tmp_path):
+    p = _write(tmp_path / "mixto.csv", [
+        "id;english_thousands;salario;version;codigo",
+        '1;"1,234";55.000 €;1,2,3;0012',
+        '2;"12,500";60-65k;2,0,1;0034',
+    ])
+    cat = Catalog(tmp_path / "data")
+    meta = cat.register(str(p))
+    types = {c["name"]: c["type"] for c in meta["columns"]}
+    # "1,234"/"12,500" could be English thousands: never guessed
+    assert types["english_thousands"] == "VARCHAR"
+    assert types["salario"] == "VARCHAR"
+    assert types["version"] == "VARCHAR"
+    assert "numbers_converted" not in meta
+
+
+def test_decimal_separator_dot_opts_out_of_the_automatic_detection(tmp_path):
+    p = _write(tmp_path / "keep.csv", ["a;b", "x;1,50", "y;2,25"])
+    cat = Catalog(tmp_path / "data")
+    meta = cat.register(str(p), options={"decimal_separator": "."})
+    assert {c["name"]: c["type"] for c in meta["columns"]}["b"] == "VARCHAR"
+
+
+def test_excel_title_and_blank_spacer_row_above_the_header_are_skipped(tmp_path):
+    # the job-hunt workbook's second sheet: a title, an empty row, then the header
+    xlsx = tmp_path / "busqueda.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Entrevistas"
+    ws.append(["Seguimiento de entrevistas 2026"])
+    ws.append([])
+    ws.append(["Empresa", "Fecha", "Fase"])
+    ws.append(["Acme", "2026-05-01", "Técnica"])
+    wb.save(xlsx)
+    cat = Catalog(tmp_path / "data")
+    ds = cat.register(str(xlsx))["datasets"][0]
+    assert ds["columns"] == ["Empresa", "Fecha", "Fase"]
+    assert ds["row_count"] == 1
+
+
+def test_single_column_excel_sheet_is_never_skipped(tmp_path):
+    xlsx = tmp_path / "lista.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    for v in ("nombre", "Ana", "Luis"):
+        ws.append([v])
+    wb.save(xlsx)
+    cat = Catalog(tmp_path / "data")
+    ds = cat.register(str(xlsx))["datasets"][0]
+    assert ds["columns"] == ["nombre"] and ds["row_count"] == 2
+
+
+def test_nested_export_does_not_flood_register_or_describe(tmp_path):
+    # a Funes-style export: one row, one big array of structs. Registering it
+    # used to return ~200k characters (top_values of the whole array)
+    p = tmp_path / "export.json"
+    spans = [{"id": i, "start_ts": 1.0 * i, "end_ts": i + 0.5, "title": "Visual Studio Code - " + "x" * 80,
+              "category": "Coding"} for i in range(400)]
+    p.write_text(json.dumps({"spans": spans, "commits": [], "exported_at": 1.0}), encoding="utf-8")
+    cat = Catalog(tmp_path / "data")
+    meta = cat.register(str(p))
+    assert len(json.dumps(meta)) < 4000
+    assert "top_values" not in meta["profile"]["spans"]
+    assert "UNNEST" in meta["hint"]
+    r = cat.query("SELECT SUM(s.end_ts - s.start_ts) AS t FROM (SELECT UNNEST(spans) AS s FROM export)")
+    assert r["rows"][0]["t"] == pytest.approx(200.0)

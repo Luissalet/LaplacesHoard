@@ -153,7 +153,9 @@ def _first_lines(text: str, max_chars: int = 600) -> str:
 def _json_safe(value: Any, *, cap: Optional[int] = None, list_cap: Optional[int] = None) -> Any:
     """Make a DuckDB value JSON-safe: decimals as strings, dates ISO, NaN as string.
 
-    `cap` bounds every string (including a BLOB's hex text). `list_cap` bounds
+    `cap` bounds every string; when it is set (a result meant for a person or
+    a model), a BLOB is shown as "<binary, N bytes>" instead of its bytes,
+    which say nothing to either. `list_cap` bounds
     how many elements of a nested LIST/STRUCT-array are kept, so one huge
     nested value (a JSON export's array column, a wide BLOB) cannot blow up a
     small sample or query result — pass it wherever the result is meant for a
@@ -175,10 +177,9 @@ def _json_safe(value: Any, *, cap: Optional[int] = None, list_cap: Optional[int]
     if isinstance(value, UUID):
         return str(value)
     if isinstance(value, (bytes, bytearray)):
-        text = value.hex()
-        if cap is not None and len(text) > cap:
-            return text[:cap] + "…"
-        return text
+        if cap is not None:
+            return f"<binary, {len(value):,} bytes>"
+        return value.hex()
     if isinstance(value, str):
         if cap is not None and len(value) > cap:
             return value[:cap] + "…"
@@ -204,6 +205,8 @@ def _json_safe(value: Any, *, cap: Optional[int] = None, list_cap: Optional[int]
 # activity-log export, say) must not blow up to hundreds of thousands of
 # characters just to preview it.
 MAX_LIST_ITEMS = 20
+# ...and fewer still in describe's 5 sample rows, which are only a preview
+SAMPLE_LIST_ITEMS = 3
 
 
 def _base_type(type_name: str) -> str:
@@ -433,9 +436,14 @@ class Catalog:
                     conn.execute(stmt)
                 except duckdb.Error:
                     pass
-            if locale_numeric is not None:
-                select_sql = _apply_locale_numbers(conn, select_sql, *locale_numeric)
             linked = size > LINK_THRESHOLD_BYTES
+            numbers_converted: list[str] = []
+            if locale_numeric is not None:
+                dec, thou = locale_numeric
+                auto = not (dec or thou)
+                # a linked (>1 GB) file is not scanned for automatic detection
+                if not (auto and linked):
+                    select_sql, numbers_converted = _apply_locale_numbers(conn, select_sql, dec, thou, auto=auto)
             kind_sql = "VIEW" if linked else "TABLE"
             conn.execute(f'CREATE {kind_sql} "{view_name}" AS {select_sql}')
             row_count = conn.execute(f'SELECT COUNT(*) FROM "{view_name}"').fetchone()[0]
@@ -456,7 +464,15 @@ class Catalog:
                 options=options,
             )
             self._put_meta(conn, meta)
-        return self.describe(view_name)
+        result = self.describe(view_name)
+        if numbers_converted:
+            sep = "decimal ',' and thousands '.'" if not (locale_numeric and any(locale_numeric)) else "the given separators"
+            result["numbers_converted"] = {
+                "columns": numbers_converted,
+                "note": f"read as numbers with {sep}, e.g. '-1.150,00' = -1150.00; "
+                        "pass options.decimal_separator='.' to keep them as text",
+            }
+        return result
 
     def _register_csv(self, p: Path, name: Optional[str], options: dict) -> dict:
         view_name = slugify_name(name or p.stem)
@@ -486,7 +502,8 @@ class Catalog:
                 args.append(f"dateformat='{_esc(date_fmt)}'")
             return f"SELECT * FROM read_csv_auto({', '.join(args)})"
 
-        locale_numeric = (decimal_sep, thousands_sep) if (decimal_sep or thousands_sep) else None
+        # (None, None) means "detect Spanish-style numbers automatically"
+        locale_numeric = (decimal_sep, thousands_sep)
         size = p.stat().st_size
         # No explicit encoding: try UTF-8 first, then the common Windows
         # fallbacks, so a Windows-1252 export from a Spanish machine "just
@@ -611,15 +628,24 @@ class Catalog:
                 cols = [d[0] for d in cur.description]
                 view_name = slugify_name(f"{base}__{slugify_name(table)}")
                 csv_path = self.cache_dir / f"__sqlite_{view_name}.csv"
+                blob_cols: set[int] = set()
                 with csv_path.open("w", newline="", encoding="utf-8") as fh:
                     writer = csv.writer(fh)
                     writer.writerow(cols)
                     for row in cur:
-                        writer.writerow(list(row))
+                        out_row = list(row)
+                        for i, v in enumerate(out_row):
+                            if isinstance(v, (bytes, bytearray)):
+                                # DuckDB reads "\xHH" escapes back into the same bytes
+                                out_row[i] = "".join(f"\\x{b:02X}" for b in v)
+                                blob_cols.add(i)
+                        writer.writerow(out_row)
+                types = ", ".join(f"'{_esc(cols[i])}': 'BLOB'" for i in sorted(blob_cols))
+                types_arg = f", types={{{types}}}" if types else ""
                 parquet_path = self.cache_dir / f"{view_name}.parquet"
                 with self._writable() as conn:
                     conn.execute(
-                        f"COPY (SELECT * FROM read_csv_auto('{_esc(str(csv_path))}', header=true)) "
+                        f"COPY (SELECT * FROM read_csv_auto('{_esc(str(csv_path))}', header=true{types_arg})) "
                         f"TO '{_esc(str(parquet_path))}' (FORMAT PARQUET)"
                     )
                 csv_path.unlink(missing_ok=True)
@@ -677,7 +703,7 @@ class Catalog:
             sample = conn.execute(f'SELECT * FROM "{name}" LIMIT 5').fetchall()
             col_names = [c["name"] for c in columns]
             sample_rows = [
-                {col_names[i]: _json_safe(v, cap=120, list_cap=MAX_LIST_ITEMS) for i, v in enumerate(row)}
+                {col_names[i]: _json_safe(v, cap=120, list_cap=SAMPLE_LIST_ITEMS) for i, v in enumerate(row)}
                 for row in sample
             ]
             out = {
@@ -695,10 +721,7 @@ class Catalog:
             if stale:
                 out["stale"] = True
                 out["stale_hint"] = "the source file changed since registration; call data_register on it again"
-            nested = [
-                c["name"] for c in columns
-                if _base_type(c["type"]) in ("STRUCT", "MAP") or c["type"].upper().rstrip().endswith("[]")
-            ]
+            nested = [c["name"] for c in columns if _is_nested_type(c["type"])]
             if nested and meta["row_count"] <= 5:
                 out["hint"] = (
                     f"this dataset has only {meta['row_count']} row(s) with nested column(s) "
@@ -783,6 +806,11 @@ class Catalog:
         }
 
 
+def _is_nested_type(type_name: str) -> bool:
+    t = type_name.upper().rstrip()
+    return _base_type(t) in ("STRUCT", "MAP", "UNION") or t.endswith("]")
+
+
 def _compact_meta(d: dict) -> dict:
     return {"name": d["name"], "row_count": d["row_count"], "columns": [c["name"] for c in d["columns"]]}
 
@@ -827,6 +855,14 @@ def _profile(conn, view_name: str, columns: list[dict], total: int) -> dict:
         elif is_temporal_type(col["type"]):
             stats_row = conn.execute(f'SELECT MIN({q}), MAX({q}) FROM "{view_name}"').fetchone()
             entry.update({"min": _json_safe(stats_row[0]), "max": _json_safe(stats_row[1])})
+        elif _base_type(col["type"]) == "BLOB":
+            size_row = conn.execute(f'SELECT MIN(octet_length({q})), MAX(octet_length({q})) FROM "{view_name}"').fetchone()
+            entry.update({"bytes_min": size_row[0], "bytes_max": size_row[1],
+                          "note": "binary data (e.g. a thumbnail); query octet_length() rather than its contents"})
+        elif _is_nested_type(col["type"]):
+            # top values of a whole nested list/struct would be the full value
+            # repeated (hundreds of KB for an export's array column)
+            entry["note"] = "nested value: expand it with UNNEST in data_query to profile its fields"
         else:
             try:
                 top = conn.execute(
@@ -912,14 +948,18 @@ def _sniff_dayfirst_format(p: Path, delimiter: Optional[str], header: bool, enco
     return None
 
 
+_MAX_TITLE_ROWS = 10
+
+
 def _resolve_excel_skip_rows(ws, explicit: Any) -> int:
     """How many leading rows to skip before the header row.
 
-    An explicit `options.skip_rows` always wins. Otherwise, detect a lone
-    title row above the real header - one filled cell in row 1 (a title
-    like "Q1 2024 report" in a merged cell) followed by a row with several
-    filled cells (the actual column headers) - which otherwise produces
-    columns named col0, col1... from the title row's single value.
+    An explicit `options.skip_rows` always wins. Otherwise, detect a title
+    block above the real header: a first row with a single filled cell (a
+    title like "Q1 2024 report" in a merged cell), then any further rows
+    with at most one filled cell (blank spacer rows, a subtitle), then a row
+    with several filled cells - the actual column headers. Without this the
+    title becomes the header, producing columns named col1, col2...
     """
     if explicit is not None:
         try:
@@ -927,61 +967,102 @@ def _resolve_excel_skip_rows(ws, explicit: Any) -> int:
         except (TypeError, ValueError):
             raise DataError(f"skip_rows must be a whole number, got {explicit!r}")
     try:
-        peek = list(ws.iter_rows(min_row=1, max_row=2, values_only=True))
+        peek = list(ws.iter_rows(min_row=1, max_row=_MAX_TITLE_ROWS + 1, values_only=True))
     except Exception:  # noqa: BLE001 - never let the heuristic itself break registration
         return 0
-    if len(peek) < 2:
+    nonempty = lambda row: sum(1 for v in row if v not in (None, "") and str(v).strip())  # noqa: E731
+    if not peek or nonempty(peek[0]) != 1:
         return 0
-    nonempty = lambda row: sum(1 for v in row if v not in (None, ""))  # noqa: E731
-    if nonempty(peek[0]) == 1 and nonempty(peek[1]) >= 2:
-        return 1
+    for i, row in enumerate(peek[1:], start=1):
+        filled = nonempty(row)
+        if filled >= 2:
+            return i
     return 0
 
 
-def _apply_locale_numbers(conn, base_sql: str, decimal_sep: Optional[str], thousands_sep: Optional[str]) -> str:
-    """Cast VARCHAR columns that look like locale-formatted numbers to DOUBLE.
+# A value written the Spanish/continental way: "-1.150,00", "7.262,37",
+# "51,05", "1.234" (thousands only) or "42". Used by the automatic detection
+# below, which only fires when *every* non-blank value of a text column
+# matches this and at least one of them is unmistakably a decimal comma.
+_COMMA_NUMBER_RE = r"[+-]?(\d{1,3}(\.\d{3})+|\d+)(,\d+)?"
+# Unambiguous decimal-comma evidence: a comma followed by 1-2 or 4+ digits
+# ("51,05", "3,5", "40,4168"), or dot-thousands together with a comma
+# ("1.150,00"). "1,234" alone is not evidence: it could be English 1234.
+_COMMA_DECIMAL_EVIDENCE_RE = r"[+-]?(\d+,(\d{1,2}|\d{4,})|\d{1,3}(\.\d{3})+,\d+)"
+_MAX_EXACT_SCALE = 6
+
+
+def _apply_locale_numbers(
+    conn, base_sql: str, decimal_sep: Optional[str], thousands_sep: Optional[str], *, auto: bool = False,
+) -> tuple[str, list[str]]:
+    """Turn VARCHAR columns that hold locale-formatted numbers into numbers.
 
     DuckDB's CSV sniffer only ever considers '.' a decimal point, so a
-    Spanish export like "-1.150,00" is left as text. When `decimal_sep` /
-    `thousands_sep` are given, every VARCHAR column of `base_sql` is tested:
-    strip the thousands separator, turn the decimal separator into '.', and
-    TRY_CAST to DOUBLE; a column is only rewritten when at least 90% of its
-    non-blank values cast cleanly, so genuinely non-numeric text columns
-    (names, categories) are left untouched.
+    Spanish export like "-1.150,00" is left as text and SUM/AVG fail on it.
+
+    Explicit mode (`decimal_sep` / `thousands_sep` given): every VARCHAR
+    column is tested - strip the thousands separator, turn the decimal
+    separator into '.', TRY_CAST to DOUBLE - and rewritten when at least 90%
+    of its non-blank values cast cleanly.
+
+    Automatic mode (`auto=True`, nothing given): a VARCHAR column is
+    rewritten only when *all* its non-blank values look like "1.234,56" /
+    "51,05" / "42" and at least one has an unambiguous decimal comma, so no
+    value is ever lost to a NULL and English-looking "1,234" is left alone.
+    Those columns become DECIMAL with the column's own number of decimals
+    (exact sums for money), or DOUBLE beyond 6 decimals.
+
+    Returns the (possibly rewritten) SELECT and the names of the columns it
+    converted.
     """
-    decimal_sep = decimal_sep or "."
     try:
         described = conn.execute(f"DESCRIBE ({base_sql})").fetchall()
     except duckdb.Error:
-        return base_sql
-    parts = []
-    changed = False
+        return base_sql, []
+    if auto:
+        decimal_sep, thousands_sep = ",", "."
+    decimal_sep = decimal_sep or "."
+    parts: list[str] = []
+    converted: list[str] = []
     for row in described:
         cname, ctype = row[0], row[1]
         q = '"' + cname.replace('"', '""') + '"'
         if _base_type(ctype) != "VARCHAR" or (decimal_sep == "." and not thousands_sep):
             parts.append(q)
             continue
-        norm = q
+        norm = f"TRIM({q})"
         if thousands_sep:
             norm = f"REPLACE({norm}, '{_esc(thousands_sep)}', '')"
         if decimal_sep != ".":
             norm = f"REPLACE({norm}, '{_esc(decimal_sep)}', '.')"
-        candidate = f"TRY_CAST(NULLIF(TRIM({norm}), '') AS DOUBLE)"
+        blank = f"({q} IS NULL OR TRIM({q}) = '')"
         try:
-            non_null, castable = conn.execute(
-                f"SELECT COUNT(*) FILTER (WHERE {q} IS NOT NULL AND TRIM({q}) != ''), "
-                f"COUNT(*) FILTER (WHERE {q} IS NOT NULL AND TRIM({q}) != '' AND {candidate} IS NOT NULL) "
-                f"FROM ({base_sql})"
-            ).fetchone()
+            if auto:
+                non_blank, matching, evidence, scale = conn.execute(
+                    f"SELECT COUNT(*) FILTER (WHERE NOT {blank}), "
+                    f"COUNT(*) FILTER (WHERE NOT {blank} AND regexp_full_match(TRIM({q}), '{_COMMA_NUMBER_RE}')), "
+                    f"COUNT(*) FILTER (WHERE NOT {blank} AND regexp_full_match(TRIM({q}), '{_COMMA_DECIMAL_EVIDENCE_RE}')), "
+                    f"MAX(CASE WHEN strpos(TRIM({q}), ',') > 0 THEN length(split_part(TRIM({q}), ',', 2)) ELSE 0 END) "
+                    f"FROM ({base_sql})"
+                ).fetchone()
+                ok = bool(non_blank) and matching == non_blank and evidence > 0
+                target = f"DECIMAL(18, {int(scale or 0)})" if (scale or 0) <= _MAX_EXACT_SCALE else "DOUBLE"
+            else:
+                probe = f"TRY_CAST(NULLIF({norm}, '') AS DOUBLE)"
+                non_blank, castable = conn.execute(
+                    f"SELECT COUNT(*) FILTER (WHERE NOT {blank}), "
+                    f"COUNT(*) FILTER (WHERE NOT {blank} AND {probe} IS NOT NULL) FROM ({base_sql})"
+                ).fetchone()
+                ok = bool(non_blank) and castable / non_blank >= 0.9
+                target = "DOUBLE"
         except duckdb.Error:
             parts.append(q)
             continue
-        if non_null and castable / non_null >= 0.9:
-            parts.append(f"{candidate} AS {q}")
-            changed = True
+        if ok:
+            parts.append(f"TRY_CAST(NULLIF({norm}, '') AS {target}) AS {q}")
+            converted.append(cname)
         else:
             parts.append(q)
-    if not changed:
-        return base_sql
-    return f"SELECT {', '.join(parts)} FROM ({base_sql}) t"
+    if not converted:
+        return base_sql, []
+    return f"SELECT {', '.join(parts)} FROM ({base_sql}) t", converted
