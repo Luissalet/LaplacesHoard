@@ -33,7 +33,7 @@ def test_calc_endpoint_logs_and_returns_id(client: TestClient):
 def test_bad_expression_returns_structured_400(client: TestClient):
     r = client.post("/api/agent/calc", json={"expression": "__import__('os')"})
     assert r.status_code == 400
-    detail = r.json()["detail"]
+    detail = r.json()
     assert "error" in detail and "message" in detail
 
 
@@ -62,7 +62,7 @@ def test_data_query_rejects_write_statement(client: TestClient, sample_csv: Path
     client.post("/api/agent/data_register", json={"path": str(sample_csv), "name": "sample"})
     r = client.post("/api/agent/data_query", json={"sql": "DELETE FROM sample"})
     assert r.status_code == 400
-    assert r.json()["detail"]["error"] == "sql_gate"
+    assert r.json()["error"] == "sql_gate"
 
 
 def test_notebook_cell_lifecycle(client: TestClient):

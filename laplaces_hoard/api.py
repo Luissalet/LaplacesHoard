@@ -8,14 +8,18 @@ and serves the built frontend.
 from __future__ import annotations
 
 import base64
+import logging
 import re
 import time
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from pydantic import BaseModel, Field
 
 from . import db
@@ -45,6 +49,31 @@ def _error_code(exc: Exception) -> str:
     s1 = re.sub(r"(.)([A-Z][a-z]+)", r"\1_\2", name)
     s2 = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", s1)
     return s2.lower() or "error"
+
+
+log = logging.getLogger("laplaces_hoard")
+
+
+def _setup_logging(data_dir: Path) -> None:
+    """Rotating log at <data>/logs/app.log: call summaries and errors, never file contents."""
+    log_dir = data_dir / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    target = str((log_dir / "app.log").resolve())
+    for h in log.handlers:
+        if isinstance(h, RotatingFileHandler) and h.baseFilename == target:
+            return
+    handler = RotatingFileHandler(target, maxBytes=1_000_000, backupCount=3, encoding="utf-8")
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    log.addHandler(handler)
+    log.setLevel(logging.INFO)
+
+
+def _validation_message(exc: RequestValidationError) -> str:
+    parts = []
+    for err in exc.errors()[:5]:
+        loc = ".".join(str(x) for x in err.get("loc", ()) if x != "body")
+        parts.append(f"{loc or 'body'}: {err.get('msg', 'invalid')}")
+    return "invalid arguments: " + "; ".join(parts)
 
 
 class AppState:
@@ -174,9 +203,24 @@ def create_app(data_dir: Path, static_dir: Optional[Path] = None, port: int = 88
     data_dir.mkdir(parents=True, exist_ok=True)
     state = AppState(data_dir)
 
+    _setup_logging(data_dir)
     app = FastAPI(title=DISPLAY_NAME, version=__version__)
     app.add_middleware(BrowserGuardMiddleware, port=port)
     app.state.lh = state
+
+    # Errors always come back as {"error": "<code>", "message": "<actionable text>"}.
+    @app.exception_handler(StarletteHTTPException)
+    async def _http_error(request: Request, exc: StarletteHTTPException):
+        detail = exc.detail
+        if isinstance(detail, dict) and "error" in detail:
+            body = detail
+        else:
+            body = {"error": "http_error" if exc.status_code != 404 else "not_found", "message": str(detail)}
+        return JSONResponse(body, status_code=exc.status_code)
+
+    @app.exception_handler(RequestValidationError)
+    async def _validation_error(request: Request, exc: RequestValidationError):
+        return JSONResponse({"error": "invalid_arguments", "message": _validation_message(exc)}, status_code=422)
 
     # ------------------------------------------------------------------ #
     # helpers
@@ -192,7 +236,22 @@ def create_app(data_dir: Path, static_dir: Optional[Path] = None, port: int = 88
                 state.conn, engine=engine, operation=operation, input_data=input_data,
                 output_data=None, ok=False, error=str(exc), elapsed_ms=elapsed, source=source,
             )
+            log.info("%s %s.%s error %s", source, engine, operation, _error_code(exc))
             raise HTTPException(status_code=400, detail={"error": _error_code(exc), "message": str(exc)}) from exc
+        except HTTPException:
+            raise
+        except Exception as exc:  # noqa: BLE001 - an engine bug must still answer in JSON and be logged
+            elapsed = (time.monotonic() - start) * 1000
+            message = f"{type(exc).__name__}: {exc}"[:500]
+            db.log_computation(
+                state.conn, engine=engine, operation=operation, input_data=input_data,
+                output_data=None, ok=False, error=message, elapsed_ms=elapsed, source=source,
+            )
+            log.exception("%s %s.%s failed unexpectedly", source, engine, operation)
+            raise HTTPException(
+                status_code=500,
+                detail={"error": "internal_error", "message": f"unexpected failure in {engine}.{operation}: {message}"},
+            ) from exc
         elapsed = (time.monotonic() - start) * 1000
         chart_path = output.get("_chart_path") if isinstance(output, dict) else None
         loggable = {k: v for k, v in output.items() if k != "_chart_path"} if isinstance(output, dict) else output
@@ -446,15 +505,22 @@ def create_app(data_dir: Path, static_dir: Optional[Path] = None, port: int = 88
     # ------------------------------------------------------------------ #
 
     if static_dir is not None and Path(static_dir).is_dir():
-        index_path = Path(static_dir) / "index.html"
+        static_root = Path(static_dir).resolve()
+        index_path = static_root / "index.html"
 
-        app.mount("/assets", StaticFiles(directory=Path(static_dir) / "assets"), name="assets")
+        if (static_root / "assets").is_dir():
+            app.mount("/assets", StaticFiles(directory=static_root / "assets"), name="assets")
 
         @app.get("/{full_path:path}")
         def spa(full_path: str):
-            candidate = Path(static_dir) / full_path
-            if full_path and candidate.is_file():
-                return FileResponse(candidate)
+            if full_path.startswith("api/"):
+                raise HTTPException(status_code=404, detail={"error": "not_found", "message": f"no API route /{full_path}"})
+            if full_path:
+                # Only ever serve files that resolve *inside* the built frontend:
+                # "..%2f", "//etc/passwd" and Windows "..\\" must not escape it.
+                candidate = (static_root / full_path).resolve()
+                if candidate.is_relative_to(static_root) and candidate.is_file():
+                    return FileResponse(candidate)
             return FileResponse(index_path)
     else:
         @app.get("/")
