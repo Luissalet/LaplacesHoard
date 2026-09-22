@@ -4,6 +4,7 @@ against a live instance of the app and drive it through the MCP protocol
 """
 from __future__ import annotations
 
+import json
 import os
 import sys
 from pathlib import Path
@@ -86,6 +87,8 @@ async def test_mcp_lists_all_tools_and_calls_calc_and_data_query(live_app):
             assert len(chart.content[0].text) < 1000
             assert "png_base64" not in chart.content[0].text
             assert '"cite"' in chart.content[0].text
+            chart_json = json.loads(chart.content[0].text)
+            assert chart_json["chart_url"].endswith(f"/api/charts/{chart_json['id']}")
 
             # include_image=true still returns it, for a model that can see images
             chart2 = await session.call_tool(

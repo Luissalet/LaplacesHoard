@@ -263,7 +263,12 @@ def _run(
         if group_by and dataset and column:
             groups = _resolve_grouped(catalog, dataset, column, group_by, where)
             if len(groups) != 2:
-                raise StatsError(f"group_by must select exactly 2 groups, found {len(groups)}: {sorted(groups)}")
+                found = sorted(groups)
+                example = ", ".join("'" + str(g).replace("'", "''") + "'" for g in found[:2])
+                raise StatsError(
+                    f"group_by must select exactly 2 groups, found {len(groups)}: {found}; "
+                    f"keep two with where, e.g. where=\"{group_by} IN ({example})\""
+                )
             (name1, d1), (name2, d2) = sorted(groups.items())
         else:
             d1 = _get_data(data, catalog, dataset, column, where)

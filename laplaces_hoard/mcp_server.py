@@ -346,8 +346,10 @@ def data_register(path: str, name: Optional[str] = None, options: Optional[dict]
     omitted, so Windows-1252 exports work without setting anything),
     date_format (e.g. "%d/%m/%Y"; two-digit-year day-first dates like
     "13/02/25" are auto-detected already), decimal_separator and
-    thousands_separator (e.g. "," and "." for Spanish numbers like
-    "-1.150,00" - otherwise such a column stays text and SUM/AVG fail on it).
+    thousands_separator. Spanish-style numbers ("-1.150,00", "51,05") are
+    detected automatically and become exact numbers - the result lists them
+    under `numbers_converted`; pass decimal_separator="." to keep such a
+    column as text, or both separators to force another convention.
     Excel also takes skip_rows (a title row above the real header is
     detected and skipped automatically; set this to override).
     Returns the schema and profile (like data_describe); a single-row result
@@ -419,7 +421,7 @@ def data_chart(
     row_count, encoding) - a text-only model must not receive an unrequested
     image, it can crash the turn. Only set include_image=true when you can
     see images and actually need to look at this one; otherwise just tell
-    the person to check [id] in the app, or call this again with
+    the person the returned chart_url (or [id] in the app), or call this again with
     include_image=true if you need to read values off the chart yourself.
 
     Keywords: chart, plot, graph, bar chart, line chart, histogram, pie
@@ -432,11 +434,14 @@ def data_chart(
     }))
     png_b64 = result.pop("png_base64", "")
     result.pop("spec", None)
+    if result.get("id"):
+        # a link the person can open straight from the chat
+        result["chart_url"] = f"{APP_URL}/api/charts/{result['id']}"
     if not include_image:
         result["image"] = (
             "not included (this call did not set include_image=true); the chart was still saved - "
-            f"see it in the app's Work log entry {result.get('cite', '')}, or call data_chart again "
-            "with include_image=true if you need to read values off it yourself"
+            f"give the person chart_url, or point them at the app's Work log entry {result.get('cite', '')}; "
+            "call data_chart again with include_image=true only if you need to read values off it yourself"
         )
     content: list[Any] = [TextContent(type="text", text=json.dumps(result, ensure_ascii=False))]
     if png_b64 and include_image:

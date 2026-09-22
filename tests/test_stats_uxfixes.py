@@ -53,3 +53,17 @@ def test_inline_data_pairs_are_left_exactly_as_given():
     # inline data/data2 are trusted as already paired by the caller
     r = stats.run("pearson", data=[1, 2, 3, 4], data2=[2, 4, 6, 9])
     assert r["n"] == 4
+
+
+def test_three_groups_error_says_how_to_keep_two(tmp_path):
+    # the Daguerre walk: a model that forgets the filter gets told the exact where
+    p = tmp_path / "fotos.csv"
+    with p.open("w", newline="", encoding="utf-8") as fh:
+        w = csv.writer(fh)
+        w.writerow(["make", "iso"])
+        w.writerows([("Apple", 400), ("Apple", 800), ("SONY", 100), ("SONY", 200), ("FUJIFILM", 320)])
+    cat = Catalog(tmp_path / "data")
+    cat.register(str(p))
+    with pytest.raises(stats.StatsError) as exc_info:
+        stats.run("mannwhitneyu", catalog=cat, dataset="fotos", column="iso", group_by="make")
+    assert "where=\"make IN ('Apple', 'FUJIFILM')\"" in str(exc_info.value)
