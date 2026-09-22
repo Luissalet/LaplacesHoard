@@ -83,6 +83,7 @@ export interface UnitsResult {
   to_magnitude: number;
   to_unit: string;
   formatted: string;
+  precision_note?: string;
 }
 
 export interface DateResult {
@@ -115,8 +116,9 @@ export interface ColumnProfile {
   distinct_approx: number;
   min?: unknown;
   max?: unknown;
-  mean?: number;
-  sd?: number;
+  mean?: number | null;
+  sd?: number | null;
+  histogram?: number[];
   top_values?: { value: unknown; count: number }[];
 }
 
@@ -131,6 +133,7 @@ export interface QueryResult {
   columns: { name: string; type: string }[];
   rows: Record<string, unknown>[];
   row_count: number;
+  total_rows: number | null;
   truncated: boolean;
   elapsed_ms: number;
 }
@@ -191,6 +194,23 @@ export const api = {
     post<Record<string, unknown>>("/api/ui/data_register", { path, name, options }),
   query: (sql: string, limit = 50) => post<QueryResult>("/api/ui/data_query", { sql, limit }),
   chart: (payload: Record<string, unknown>) => post<ChartResult>("/api/ui/data_chart", payload),
+  exportCsv: async (sql: string): Promise<Blob> => {
+    const res = await fetch("/api/export/csv", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sql }),
+    });
+    if (!res.ok) {
+      let message = res.statusText;
+      try {
+        message = (await res.json()).message ?? message;
+      } catch {
+        /* not JSON */
+      }
+      throw new ApiError("export", message, res.status);
+    }
+    return res.blob();
+  },
 
   log: (params: { limit?: number; engine?: string; source?: string; query?: string } = {}) => {
     const q = new URLSearchParams();

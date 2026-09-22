@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react";
-import { Play, Trash2 } from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
+import { Play } from "lucide-react";
 import { api, type Cell } from "../api";
 import type { DictKey } from "../i18n";
-import { CiteBadge, ErrorBlock, Latex, VerifiedBadge, copyCite } from "../components/ResultView";
+import { CiteBadge, ConfirmDelete, ErrorBlock, Latex, VerifiedBadge, copyCite, fmtNum } from "../components/ResultView";
 
 const ENGINES = ["calc", "math", "units", "dates"] as const;
 type Engine = (typeof ENGINES)[number];
@@ -14,7 +14,9 @@ const PLACEHOLDER_KEY: Record<Engine, DictKey> = {
   dates: "notebook_placeholder_dates",
 };
 
-export function NotebookPage({ t }: { t: (k: DictKey) => string }) {
+type T = (k: DictKey) => string;
+
+export function NotebookPage({ t }: { t: T }) {
   const [cells, setCells] = useState<Cell[]>([]);
   const [engine, setEngine] = useState<Engine>("calc");
   const [input, setInput] = useState("");
@@ -52,7 +54,7 @@ export function NotebookPage({ t }: { t: (k: DictKey) => string }) {
   return (
     <div>
       <div className="card">
-        <div className="row" style={{ marginBottom: 10 }}>
+        <div className="row" style={{ marginBottom: 10, justifyContent: "space-between" }}>
           <div className="pill-select">
             {ENGINES.map((e) => (
               <button key={e} className={engine === e ? "active" : ""} onClick={() => setEngine(e)}>
@@ -60,11 +62,12 @@ export function NotebookPage({ t }: { t: (k: DictKey) => string }) {
               </button>
             ))}
           </div>
+          <span className="faint">{t("notebook_hint")}</span>
         </div>
         <div className="row">
           <input
             type="text"
-            className="grow"
+            className="grow mono"
             placeholder={t(PLACEHOLDER_KEY[engine])}
             value={input}
             onChange={(e) => setInput(e.target.value)}
@@ -80,16 +83,16 @@ export function NotebookPage({ t }: { t: (k: DictKey) => string }) {
       <div style={{ marginTop: 16 }}>
         {loaded && cells.length === 0 && <div className="empty-state">{t("notebook_empty")}</div>}
         {[...cells].reverse().map((cell) => (
-          <CellCard key={cell.id} cell={cell} onDelete={removeCell} />
+          <CellCard key={cell.id} cell={cell} onDelete={removeCell} t={t} />
         ))}
       </div>
     </div>
   );
 }
 
-function CellCard({ cell, onDelete }: { cell: Cell; onDelete: (id: number) => void }) {
+function CellCard({ cell, onDelete, t }: { cell: Cell; onDelete: (id: number) => void; t: T }) {
   const result = cell.result as Record<string, unknown> | null;
-  const isError = result && "error" in result;
+  const isError = result && "error" in result && "message" in result;
   return (
     <div className="cell">
       <div className="cell-header">
@@ -97,47 +100,68 @@ function CellCard({ cell, onDelete }: { cell: Cell; onDelete: (id: number) => vo
           <span className="badge badge-muted">{cell.engine}</span>
           <code>{cell.input}</code>
         </div>
-        <button className="icon-btn" onClick={() => onDelete(cell.id)} title="Delete">
-          <Trash2 size={14} />
-        </button>
+        <div className="row" style={{ gap: 4 }}>
+          {result && typeof result.id === "string" && <CiteBadge id={result.id} onClick={copyCite} title={t("common_copy_cite")} />}
+          <ConfirmDelete onConfirm={() => onDelete(cell.id)} label={t("common_delete")} confirmLabel={t("common_confirm_delete")} />
+        </div>
       </div>
       {result && isError && <ErrorBlock message={String((result as { message?: string }).message ?? "error")} />}
-      {result && !isError && <CellResult result={result} />}
+      {result && !isError && <CellResult result={result} t={t} />}
     </div>
   );
 }
 
-function CellResult({ result }: { result: Record<string, unknown> }) {
-  const id = result.id as string | undefined;
-  const exact = result.exact as string | undefined;
+type Solution = { values: Record<string, string>; numeric: Record<string, number | string | null>; verified: boolean };
+
+function CellResult({ result, t }: { result: Record<string, unknown>; t: T }) {
+  // math.solve: a list of solutions, each verified by substitution
+  if (Array.isArray(result.result)) {
+    const sols = result.result as Solution[];
+    return (
+      <div className="result-block">
+        <div className="row" style={{ justifyContent: "space-between", marginBottom: 6 }}>
+          <span className="faint">{sols.length} {t("notebook_solutions")}</span>
+          <VerifiedBadge verified={result.verified as boolean | null} verifiedLabel={t("notebook_verified")} unverifiedLabel={t("notebook_unverified")} />
+        </div>
+        {sols.map((s, i) => (
+          <div key={i} className="row result-value" style={{ gap: 18 }}>
+            {Object.entries(s.values).map(([k, v]) => (
+              <span key={k}>
+                {k} = {v}
+                {typeof s.numeric[k] === "number" && String(s.numeric[k]) !== v && (
+                  <span className="faint"> ≈ {fmtNum(s.numeric[k], 10)}</span>
+                )}
+              </span>
+            ))}
+          </div>
+        ))}
+      </div>
+    );
+  }
+
   const latex = result.latex as string | null | undefined;
+  const exact = result.exact as string | undefined;
+  const decimal = result.decimal as string | null | undefined;
   const formatted = result.formatted as string | undefined;
-  const decimal = result.decimal;
-  const verified = (result as { verified?: boolean | null }).verified;
+  const isExact = result.is_exact as boolean | undefined;
+
+  let main: ReactNode;
+  if (formatted) main = <span>{formatted}</span>;
+  else if (latex) main = <Latex tex={latex} display />;
+  else if (exact !== undefined) main = <span>{exact}</span>;
+  else if (typeof result.result === "string") main = <span>{result.result}</span>;
+  else if (result.date) main = <span>{String(result.date)} · {String(result.weekday ?? "")}</span>;
+  else main = <span>{JSON.stringify(result)}</span>;
 
   return (
     <div className="result-block">
-      <div className="row" style={{ justifyContent: "space-between" }}>
-        <div className="result-value">
-          {latex ? <Latex tex={latex} /> : <span>{exact ?? formatted ?? formatFallback(result)}</span>}
+      <div className="result-value" style={{ fontSize: 17 }}>{main}</div>
+      {decimal !== undefined && decimal !== null && exact !== undefined && decimal !== exact && (
+        <div className="muted mono" style={{ marginTop: 6, fontSize: 13 }}>
+          <span className="eq">{isExact ? "=" : "≈"}</span>
+          {decimal}
         </div>
-        <div className="row">
-          <VerifiedBadge verified={verified} verifiedLabel="verified" unverifiedLabel="unverified" />
-          {id && <CiteBadge id={id} onClick={copyCite} />}
-        </div>
-      </div>
-      {decimal !== undefined && decimal !== null && exact !== undefined && String(decimal) !== exact && (
-        <div className="faint" style={{ marginTop: 4 }}>≈ {String(decimal)}</div>
-      )}
-      {formatted && exact !== undefined && (
-        <div className="faint" style={{ marginTop: 4 }}>{formatted}</div>
       )}
     </div>
   );
-}
-
-function formatFallback(result: Record<string, unknown>): string {
-  if (typeof result.result === "string") return result.result;
-  if (result.date) return String(result.date);
-  return JSON.stringify(result);
 }

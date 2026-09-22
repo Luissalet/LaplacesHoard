@@ -32,16 +32,27 @@ export function ActivityPage({ t }: { t: (k: DictKey) => string }) {
                 </div>
                 <div className="row">
                   <span className="faint">{new Date(it.created_at).toLocaleString()}</span>
-                  <CiteBadge id={it.id} onClick={copyCite} />
+                  <span className="faint mono">{it.elapsed_ms.toFixed(0)} ms</span>
+                  <CiteBadge id={it.id} onClick={copyCite} title={t("common_copy_cite")} />
                 </div>
               </div>
-              <pre className="mono faint" style={{ marginTop: 6, whiteSpace: "pre-wrap" }}>
-                {JSON.stringify(it.input)}
+              <pre className="mono faint" style={{ marginTop: 6, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
+                {summarize(it.input)}
               </pre>
+              {!it.ok && it.error && <div className="error-block" style={{ marginTop: 6 }}>{it.error}</div>}
             </div>
           ))}
         </div>
       )}
     </div>
   );
+}
+
+function summarize(input: Record<string, unknown> | null): string {
+  if (!input) return "";
+  const parts = Object.entries(input)
+    .filter(([, v]) => v !== null && v !== undefined && v !== "" && !(typeof v === "object" && v !== null && Object.keys(v).length === 0))
+    .map(([k, v]) => `${k}=${typeof v === "string" ? v : JSON.stringify(v)}`);
+  const text = parts.join("  ");
+  return text.length > 400 ? text.slice(0, 400) + "…" : text;
 }

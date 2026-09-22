@@ -60,7 +60,7 @@ export default function App() {
       <div className="main">
         <div className="topbar">
           <div className="row">
-            <button className="icon-btn" style={{ display: "none" }} onClick={() => setSidebarOpen((s) => !s)}>
+            <button className="icon-btn menu-btn" onClick={() => setSidebarOpen((s) => !s)} aria-label="Menu">
               <Menu size={18} />
             </button>
             <span className="topbar-title">{activeLabel}</span>

@@ -4,7 +4,7 @@ import { api, type LogItem } from "../api";
 import type { DictKey } from "../i18n";
 import { CiteBadge, copyCite } from "../components/ResultView";
 
-const ENGINES = ["calc", "math", "units", "stats", "dates", "data"];
+const ENGINES = ["calc", "math", "units", "stats", "dates", "data", "log"];
 
 export function WorkLogPage({ t }: { t: (k: DictKey) => string }) {
   const [items, setItems] = useState<LogItem[]>([]);
@@ -62,7 +62,7 @@ export function WorkLogPage({ t }: { t: (k: DictKey) => string }) {
             <table className="data-table">
               <thead>
                 <tr>
-                  <th>id</th><th>{t("log_engine")}</th><th>operation</th><th>source</th><th>ok</th><th>ms</th><th>when</th><th></th>
+                  <th>id</th><th>{t("log_engine")}</th><th>{t("log_col_operation")}</th><th>{t("log_col_source")}</th><th>{t("log_col_status")}</th><th className="num">ms</th><th>{t("log_col_when")}</th><th></th>
                 </tr>
               </thead>
               <tbody>
@@ -71,9 +71,9 @@ export function WorkLogPage({ t }: { t: (k: DictKey) => string }) {
                     <td className="mono">{it.id}</td>
                     <td>{it.engine}</td>
                     <td className="mono">{it.operation}</td>
-                    <td><span className="badge badge-muted">{it.source}</span></td>
+                    <td><span className={`badge ${it.source === "agent" ? "badge-ok" : "badge-muted"}`}>{it.source === "agent" ? t("log_source_agent") : t("log_source_ui")}</span></td>
                     <td>{it.ok ? <span className="badge badge-ok">ok</span> : <span className="badge badge-error">error</span>}</td>
-                    <td>{it.elapsed_ms.toFixed(1)}</td>
+                    <td className="num">{it.elapsed_ms.toFixed(1)}</td>
                     <td className="faint">{new Date(it.created_at).toLocaleString()}</td>
                     <td>
                       <button
@@ -109,17 +109,18 @@ function DetailModal({ item, onClose, t, onRerun }: { item: LogItem; onClose: ()
       }}
       onClick={onClose}
     >
-      <div className="card" style={{ width: 560, maxHeight: "80vh", overflow: "auto" }} onClick={(e) => e.stopPropagation()}>
+      <div className="card" style={{ width: "min(640px, 92vw)", maxHeight: "80vh", overflow: "auto" }} onClick={(e) => e.stopPropagation()}>
         <div className="row" style={{ justifyContent: "space-between", marginBottom: 10 }}>
           <div className="row">
-            <CiteBadge id={item.id} onClick={copyCite} />
+            <CiteBadge id={item.id} onClick={copyCite} title={t("common_copy_cite")} />
             <span className="badge badge-muted">{item.engine}</span>
+            <code>{item.operation}</code>
           </div>
           <button className="icon-btn" onClick={onClose}><X size={16} /></button>
         </div>
-        <div className="faint" style={{ marginBottom: 4 }}>Input</div>
+        <div className="faint" style={{ marginBottom: 4 }}>{t("log_input")}</div>
         <pre className="mono result-block" style={{ whiteSpace: "pre-wrap" }}>{JSON.stringify(item.input, null, 2)}</pre>
-        <div className="faint" style={{ margin: "10px 0 4px" }}>Output</div>
+        <div className="faint" style={{ margin: "10px 0 4px" }}>{t("log_output")}</div>
         <pre className="mono result-block" style={{ whiteSpace: "pre-wrap" }}>
           {item.ok ? JSON.stringify(item.output, null, 2) : item.error}
         </pre>
