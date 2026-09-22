@@ -213,6 +213,7 @@ class Catalog:
         self._lock = threading.RLock()
         self._conn: Optional[duckdb.DuckDBPyConnection] = None
         self._conn_mode: Optional[str] = None
+        self._count_cache: Optional[int] = None
         with self._writable() as conn:
             conn.execute(
                 """
@@ -278,6 +279,21 @@ class Catalog:
             self._close_conn()
 
     # -- registration ------------------------------------------------------
+
+    def dataset_count(self, wait_s: float = 0.2) -> Optional[int]:
+        """Number of datasets, without waiting behind a long registration.
+
+        /api/health must answer instantly (Faustus polls it to decide whether
+        the app is alive), so this returns the last known count when the
+        catalogue is busy."""
+        if self._lock.acquire(timeout=wait_s):
+            try:
+                self._count_cache = int(
+                    self._reader().execute("SELECT COUNT(*) FROM _lh_datasets").fetchone()[0]
+                )
+            finally:
+                self._lock.release()
+        return self._count_cache
 
     def list_datasets(self) -> list[dict]:
         with self._lock:

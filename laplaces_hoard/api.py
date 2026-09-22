@@ -305,7 +305,7 @@ def create_app(data_dir: Path, static_dir: Optional[Path] = None, port: int = 88
     @app.get("/api/health")
     def health():
         n_computations = state.conn.execute("SELECT COUNT(*) AS n FROM computations").fetchone()["n"]
-        n_datasets = len(state.catalog.list_datasets())
+        n_datasets = state.catalog.dataset_count()
         return {
             "service": SERVICE_SLUG,
             "name": DISPLAY_NAME,

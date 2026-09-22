@@ -163,3 +163,26 @@ def test_queries_never_try_to_install_extensions(tmp_path):
         cat.query("SELECT * FROM sqlite_scan('x.db', 'y')")
     r = cat.query("SELECT current_setting('autoinstall_known_extensions') AS v")
     assert r["rows"][0]["v"] is False
+
+
+def test_dataset_count_does_not_wait_behind_a_busy_catalog(tmp_path):
+    import threading
+    import time as _time
+
+    cat = Catalog(tmp_path / "data")
+    cat.register(str(_write_csv(tmp_path / "t.csv", 3)))
+    assert cat.dataset_count() == 1
+    release = threading.Event()
+
+    def hold():
+        with cat._lock:
+            release.wait(5)
+
+    th = threading.Thread(target=hold)
+    th.start()
+    _time.sleep(0.05)
+    start = _time.monotonic()
+    assert cat.dataset_count() == 1  # cached value, answered quickly
+    assert _time.monotonic() - start < 1
+    release.set()
+    th.join()
