@@ -289,6 +289,7 @@ def create_app(data_dir: Path, static_dir: Optional[Path] = None, port: int = 88
                 state.catalog, body.sql, body.kind, body.x, body.y, body.color, body.title, out_path=out_path
             )
             return {
+                "spec": result["spec"],
                 "spec_summary": {
                     "mark": result["spec"]["mark"],
                     "encoding": list(result["spec"]["encoding"].keys()),
