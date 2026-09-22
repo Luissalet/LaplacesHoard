@@ -36,7 +36,7 @@ export default function App() {
     <div className="app-shell">
       <aside className={`sidebar ${sidebarOpen ? "open" : ""}`}>
         <div className="sidebar-brand">
-          <div className="sidebar-brand-icon"><Sigma size={17} /></div>
+          <div className="sidebar-brand-icon"><img src="/favicon-192.png" alt="" width={28} height={28} /></div>
           <div>
             <div className="sidebar-brand-name">{t("appName")}</div>
             <div className="sidebar-brand-tagline">{t("tagline")}</div>
