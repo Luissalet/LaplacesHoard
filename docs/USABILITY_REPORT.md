@@ -11,10 +11,16 @@ statement with a preamble, a job-hunt workbook, a writing log, a
 llama.cpp benchmark log, a Funes export and an Daguerre library.
 
 Date of the walk: 2026-09-22, on commit `7236fa5`. **Status: fix pass
-done**, same day. All 11 blockers and 9 of the 13 annoyances are fixed,
+done** the same day, **re-walked** on 2026-09-23. All 11 blockers and 9 of the 13 annoyances are fixed,
 each with its own regression test; see "Fix pass" below for exactly what
 changed and what was deliberately left. The "Fix" column in each table
 below is now a description of what shipped, not just a plan.
+
+**Re-walk: 2026-09-23.** Every use case was walked again, as a person and
+as an agent, after the fix pass. Four fixes only worked on paper (they
+needed an option the person cannot set, or missed the exact file of the
+use case) and three new problems showed up; all were fixed with tests.
+See "Re-walk" below for the verdict per use case.
 
 Severity: **blocker** = a wrong number shown as right, or a scenario that
 cannot be finished without knowing the internals; **annoying** = it can be
@@ -98,7 +104,8 @@ fixed in `827a24c`, verified against a running instance with Playwright.
 
 ### Left, and why
 
-- **A3** (SQLite BLOB columns shown as Python `repr` text) is only
+- **A3** (SQLite BLOB columns shown as Python `repr` text) - *fixed in
+  the re-walk (`561c609`)*. At the end of the fix pass it was only
   *partially* addressed: `aa5c972` caps the hex preview so a BLOB column
   can no longer blow up `data_describe`/`SELECT *` output, but it still
   shows as hex rather than the suggested "binary, N bytes" wording. Left
@@ -139,6 +146,44 @@ additive (new optional parameters default to the old behaviour, e.g.
 `include_image` defaults to `false` but the image is still generated and
 retrievable; `skip_rows` only auto-skips when there is strong evidence).
 
+## Re-walk (after the fix pass)
+
+Same scripts, same files, fresh data directory, on the fix pass's last
+commit `170e9b3`; then again after each fix. The agent walk now writes the
+obvious SQL first (a plain `SUM`) and only falls back to a repair if that
+fails; the person walk no longer types the text-to-number workaround.
+
+### Found still broken, and fixed
+
+| What | Why the fix pass missed it | Fix (commit) |
+| --- | --- | --- |
+| B2: Spanish amounts still text | Conversion needed `options.decimal_separator`, which the Register form does not have and a model would only set after a failed SUM | Automatic: a text column whose every value is a comma-decimal number (with at least one unambiguous one) becomes an exact `DECIMAL`; `numbers_converted` says so; `decimal_separator="."` opts out; ambiguous `1,234` is never guessed (`561c609`) |
+| A4: *Entrevistas* sheet still `col1…` | The title row is followed by a blank row; detection wanted the header right below the title | The title block may span blank or one-cell rows (`561c609`) |
+| B11/A3: Funes register 211,731 chars; BLOB as `b"\x…"` text | Samples were capped, the profile's `top_values` of the whole array were not; SQLite bytes went through CSV as their repr | Nested columns get a note instead of top values; BLOBs stay BLOBs, shown as `<binary, N bytes>` with a size profile (`561c609`) |
+| A2: `5x` in `math` | The hint lived only in `calc` | Shared parser hint for every engine (`ce0e99d`) |
+| New: every notebook error read "unexpected failure… HTTPException: 400" | The fix pass's catch-all caught the engine's already-shaped error | Stored as its own code and message (`7869abe`) |
+| New: Data page starter query invalid for `Importe (€)` | Column names were not quoted (only visible once the amount became numeric) | Quoted; exact decimals formatted in the UI language too (`ca775a1`) |
+| New: `1.000 * 3` warning never shown to the person; then a false one on `1.035` | The notebook drew only the value; once drawn, the rule flagged every 3-decimal number | Warning shown under the result, and only for thousands-looking numbers (`ab3ffd9`, `c8bc493`) |
+| A11 export of exact decimals | Only floats got the decimal comma; DECIMAL arrives as text | Every numeric column (`7869abe`) |
+| UC5 link | The model had no URL to give the person | `data_chart` returns `chart_url` (`2c7a467`); the two-group error names the `where` to use |
+
+### Verdict per use case
+
+| # | Verdict | Notes |
+| --- | --- | --- |
+| UC1 | works | Bank CSV → `DECIMAL(18,2)` amounts, plain `SUM`, chart in query order, CSV `Hogar;17445,41`; second bank (Windows-1252, preamble) and re-register with a quoted path both fine. |
+| UC2 | works | Plain `SUM` = 11745.55 [cited], `/12`, share of payroll; `pct(21, 1.234,56)` and `1.234,56 * 0,21` are refused saying to write `1234.56`; `1.000 * 3` = 3 with a warning. |
+| UC3 | works | Fisher over MCP with a 2×2 table and in the UI (p = 0.126), *Entrevistas* has its real columns, business days via `date_calc`. |
+| UC4 | works with caveat | Every cell shows a result or an error that says how to write it; the messages are in English in the Spanish UI (A7). |
+| UC5 | works | Register 2,691 chars (was 211,731), `UNNEST` query, chart as text only with a `chart_url` that returns the PNG, same chart visible in the Work log detail. |
+| UC6 | works with caveat | `3,5 km → mi`, `72 pulgadas → 182,88 cm`, 27 working days to 30/10/2026 skipping 12 October; the precision note is English (A7). |
+| UC7 | works with caveat | BLOB shown as its size; the three-group error now says which `where` to add. `data_describe` of the 25-column EXIF table is still 9,548 chars - width, not BLOBs. |
+| UC8 | works | `linregress` drops the 5 crashed runs pairwise (n = 406 of 411), slope × 1000 via `calc`, `work_log` by id. |
+
+Still open from the lists above: A7, A9, A12, A13 and the cosmetic items
+(C2 the 390 px overflow is still visible; the chart shows missing
+categories as `null`).
+
 ## What worked
 
 - `dd/mm/yyyy` dates, including all-ambiguous ones (`03/04/2025` → 3 April), were read day-first; the three preamble lines of a bank statement were skipped automatically; the UTF-8 BOM did not leak into the first column name.
@@ -150,7 +195,14 @@ retrievable; `skip_rows` only auto-skips when there is strong evidence).
 
 ## Agent-side summary (last run)
 
-46 calls, 16 errors (8 of them deliberate probes), 1 image sent without
+Re-walk, 2026-09-23: 43 calls, 9 errors (all deliberate probes, each
+saying what to do, plus a Windows path on a Linux machine), no image sent
+without being asked, 1 result over 6,000 characters (UC7's wide
+`data_describe`, 9,548). Largest result per tool: `data_describe` 9,548,
+`data_register` 4,589, `data_query` 2,686, `work_log` 1,970,
+`data_chart` 569, everything else under 600.
+
+First walk: 46 calls, 16 errors (8 of them deliberate probes), 1 image sent without
 being asked (B1), 2 results over 6,000 characters (B11, A3). Result size
 by tool, largest seen: `data_register` 377,104 (Funes JSON; 4,241 for the
 bank CSV), `data_describe` 10,970 (BLOBs), `data_query` 3,383,

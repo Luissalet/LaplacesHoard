@@ -33,9 +33,33 @@ sees the exact input and output, and can re-run it.
 | Units (`units_convert`) | Pint conversions, compound quantities ("5 ft 11 in"), temperature offsets, dimensional checks, compatible units. | Floating point, rounded to 12 significant digits. No currencies (rates need the network). |
 | Dates (`date_calc`) | Differences with calendar breakdown, adding days/months/years, business days excluding weekends and public holidays (default Spain/Madrid, any country/region the `holidays` package knows), weekday, ISO week, age, time zones, parsing of ISO, day-first numeric and Spanish dates ("3 de abril de 2026"), "today". | Business days count both ends unless `include_end=false`. Local (city) holidays are only those the `holidays` package includes. |
 | Statistics (`stats`) | `describe ttest_1samp ttest_ind (Welch) ttest_rel mannwhitneyu wilcoxon chi2_contingency fisher_exact pearson spearman linregress proportion_ci (Wilson) normal_ci binom_test`, on inline numbers or a dataset column (every row, optional `group_by` and `where`), with effect sizes and one neutral sentence of interpretation. | The interpretation states significance only. Undefined results (e.g. a constant sample) are errors, not NaN. |
-| Data (`data_*`) | Register CSV/TSV, Parquet, JSON/NDJSON, Excel (one dataset per sheet), SQLite (one per table) or a folder of files; schema and per-column profile (nulls, distinct, min/max, mean/sd, histogram, top values); read-only DuckDB SQL; charts (bar, line, area, scatter, histogram, pie, heatmap) as PNG for the model and interactive in the UI; full-result CSV export. | Queries run on a read-only connection with file access and extension downloads disabled, behind a one-statement gate. Model-facing results are capped (1,000 rows, 500 characters per cell). Sources over 1 GB are linked as views instead of copied. Registration runs in the request (no background job queue yet). |
+| Data (`data_*`) | Register CSV/TSV, Parquet, JSON/NDJSON, Excel (one dataset per sheet), SQLite (one per table) or a folder of files - Spanish-style numbers (`-1.150,00`) become exact decimals and Windows-1252 files, day-first dates and title rows above an Excel header are detected; schema and per-column profile (nulls, distinct, min/max, mean/sd, histogram, top values); read-only DuckDB SQL; charts (bar, line, area, scatter, histogram, pie, heatmap) as PNG for the model and interactive in the UI; full-result CSV export. | Queries run on a read-only connection with file access and extension downloads disabled, behind a one-statement gate. Model-facing results are capped (1,000 rows, 500 characters per cell). Sources over 1 GB are linked as views instead of copied. Registration runs in the request (no background job queue yet). |
 | Work log and audit | Every computation from the UI or the assistant gets an id, is searchable and re-runnable; "Assistant activity" lists only the model's own tool calls. | Stored input/output is capped at 20,000 characters per entry. |
 | Ask your data | A plain-English (or Spanish) question on the Data screen sends the shared language model the schema, per-column profile and up to 5 sample rows of the chosen datasets (never the full table); it must answer with one SQL query, which runs through the same read-only gate as every other query. The SQL is shown and editable, one retry happens automatically if it fails, and the answer is logged (`engine="data"`, `operation="ask"`) with the model's name and a suggested chart. | UI only - the agent already writes SQL itself via `data_query`. Needs a resolved `llm` capability (see "Shared models" below); disabled with the reason shown when none is available. |
+
+## Use cases
+
+Eight concrete walks, each done both by a person in the browser and by an
+agent over MCP, are written up in [docs/USE_CASES.md](docs/USE_CASES.md)
+(what happened when they were walked: [docs/USABILITY_REPORT.md](docs/USABILITY_REPORT.md)). In short:
+
+- **Where does my money go?** Register a Spanish bank export as it comes
+  (`;`, `03/04/2026`, `-1.150,00`, Windows-1252): amounts become exact
+  numbers on their own, then SQL by category, a chart, and a CSV that a
+  Spanish Excel opens.
+- **"How much did I spend on groceries?"** An agent chains `data_register`
+  → `data_query` → `calc` and cites every number; `1.000` or `3,5` typed
+  the Spanish way get a warning or an error that says how to write them.
+- **Job hunt.** An Excel workbook (title rows skipped) → response rate by
+  work mode → `fisher_exact` on a 2×2 table → business days since the last
+  application, Madrid holidays excluded.
+- **Activity and photo libraries.** A nested JSON export or a SQLite photo
+  catalogue: registering stays small (hints to `UNNEST`, BLOBs shown as
+  their size), and a chart comes back as a link, not an unrequested image.
+- **Benchmarks.** `linregress` of speed against context length, dropping
+  crashed runs pairwise, then the earlier result looked up by its id.
+- **Everyday numbers.** 21 % VAT, `72 pulgadas -> cm`, working days in
+  Madrid until a date, in the notebook or the units and dates screen.
 
 ## Shared models
 
@@ -118,7 +142,7 @@ guard.
 .venv\Scripts\python -m pytest -q
 ```
 
-174 tests, offline, about 35 seconds. They cover the AST whitelist
+237 tests, offline, about a minute. They cover the AST whitelist
 (`__import__`, attributes, lambdas, comprehensions), exact decimals and
 rounding, precision up to 1000 digits, runaway and memory-bomb inputs
 (timeout, recovery, refusal), concurrent calls through the worker, `solve`
@@ -132,7 +156,7 @@ fallback against path traversal, the error envelope, the UI/assistant
 split of the audit log, the `faustus-plugin.json` checker, and the MCP
 protocol itself: the adapter spawned over stdio against a live app,
 listing tools (keywords and annotations on each) and calling `calc`,
-`data_register`, `data_query`, `math`, `data_chart` (image returned) and
+`data_register`, `data_query`, `math`, `data_chart` (a `chart_url`, and the image only when asked) and
 `work_log`; the shared model backend's status/config endpoints (a token
 is never echoed back) and "Ask your data" against a mocked language model
 (`httpx.MockTransport`): what the prompt contains (schema, at most 5 sample
@@ -140,6 +164,10 @@ rows), a good SQL answer, one retry that carries the error, a clear error
 when the model does not answer in SQL, and the honest "unavailable" state
 with no model resolved; saved overrides can be cleared, a config the form
 never sends is refused, and a broken `backend.json` does not stop the app.
+The use-case walks added regressions for Spanish CSVs (separators,
+encodings, re-registering), Excel title rows, BLOB and nested columns,
+decimal-comma hints in `calc`/`math`, notebook error messages and the
+Spanish CSV export.
 
 ## Privacy and limits
 

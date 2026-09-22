@@ -36,12 +36,16 @@ answer so the human can open that exact computation and re-run it.
 2. `data_query` with SQL that does the work (`COUNT`, `SUM`, `AVG`,
    `GROUP BY`, `ORDER BY ... LIMIT 10`). Do not add up rows yourself.
 3. `data_chart` only when a picture helps; aggregate in the SQL first.
+   Give the person the returned `chart_url`; set `include_image=true` only
+   if you can see images and need to read the chart yourself.
 
 ## Traps
 
 - `row_count` in a query result is the rows returned; `total_rows` is the
   whole result. The dataset size is `row_count` from `data_describe`.
 - Sample rows in `data_describe` are five examples, not a summary.
+- Exact decimals (money read from a Spanish CSV, `numbers_converted`) come
+  back as text such as `"-1150.00"`: they are numbers, pass them to `calc` as is.
 - `data_query` is read-only: one SELECT/WITH/DESCRIBE/SUMMARIZE/PIVOT.
   Read files by registering them, not with `read_csv(...)`.
 - `calc` has no variables; use `math`. `isprime`/`factorint` must be the
