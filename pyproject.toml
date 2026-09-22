@@ -1,0 +1,36 @@
+[project]
+name = "laplaces-hoard"
+version = "0.1.0"
+description = "Exact numbers for language models: arithmetic, symbolic math, units, statistics, dates and SQL over local files, logged and citable."
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+  "fastapi==0.141.1",
+  "uvicorn[standard]==0.53.0",
+  "pydantic==2.13.5",
+  "sympy==1.14.0",
+  "Pint==0.25.3",
+  "numpy==2.4.6",
+  "scipy==1.17.1",
+  "duckdb==1.5.5",
+  "openpyxl==3.1.5",
+  "python-dateutil==2.9.0.post0",
+  "holidays==0.105",
+  "tzdata==2026.4",
+  "vl-convert-python==1.9.0.post1",
+  "mcp==1.30.0",
+  "httpx==0.28.1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest==9.1.1",
+  "pytest-asyncio==1.4.0",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["laplaces_hoard*"]
