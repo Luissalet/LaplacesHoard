@@ -60,8 +60,8 @@ def main() -> None:
                   "FROM sales\nGROUP BY region\nORDER BY revenue DESC")
         page.click("button:has-text('Run')")
         page.wait_for_selector("text=of 5 rows")
-        page.fill("input[type=text] >> nth=-1", "Revenue by region")
-        page.select_option("select >> nth=2", "revenue")
+        page.fill("#chart-builder input[type=text]", "Revenue by region")
+        page.select_option("#chart-builder select >> nth=2", "revenue")
         page.click("button:has-text('Build chart')")
         page.wait_for_selector(".chart-frame canvas, .chart-frame svg", timeout=15000)
         time.sleep(1.0)
@@ -95,6 +95,11 @@ def main() -> None:
         nav(page, "Assistant activity")
         time.sleep(0.6)
         shoot(page, "assistant-activity.png")
+
+        # Settings: the Models panel (the shared backend's resolution + reason)
+        nav(page, "Settings")
+        time.sleep(0.4)
+        shoot(page, "settings-models.png")
 
         browser.close()
 

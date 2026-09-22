@@ -542,7 +542,7 @@ function ChartBuilder({ sql, result, t }: { sql: string | null; result: QueryRes
   }
 
   return (
-    <div className="card">
+    <div className="card" id="chart-builder">
       <div className="card-head">
         <h3 className="card-title"><BarChart3 size={15} style={{ verticalAlign: -2, marginRight: 6 }} />{t("data_chart_builder")}</h3>
         <span className="faint">{sql ? t("data_chart_hint") : t("data_chart_run_first")}</span>
