@@ -15,6 +15,12 @@ from .data import Catalog, DataError
 __all__ = ["build_chart", "ChartError"]
 
 MAX_CHART_ROWS = 5000
+MAX_PNG_BYTES = 200_000
+
+
+def _short(exc: Exception) -> str:
+    text = str(exc).strip().splitlines()[0] if str(exc).strip() else type(exc).__name__
+    return text[:300]
 _KIND_TO_MARK = {
     "bar": "bar",
     "line": "line",
@@ -63,6 +69,10 @@ def build_chart(
     field_names = {c["name"] for c in columns}
     if x not in field_names:
         raise ChartError(f"x field {x!r} is not in the query result columns {sorted(field_names)}")
+    if kind == "scatter" and not y:
+        raise ChartError("scatter needs both x and y (two numeric columns of the query result)")
+    if color and color not in field_names:
+        raise ChartError(f"color field {color!r} is not in the query result columns {sorted(field_names)}")
     if y and y not in field_names:
         raise ChartError(f"y field {y!r} is not in the query result columns {sorted(field_names)}")
 
@@ -92,6 +102,8 @@ def build_chart(
     else:
         if y:
             encoding["y"] = {"field": y, "type": _field_type(columns, y), "title": y}
+        else:  # bar/line/area of x alone: count rows per x value
+            encoding["y"] = {"aggregate": "count", "type": "quantitative", "title": "count"}
         if color:
             encoding["color"] = {"field": color, "type": _field_type(columns, color), "title": color}
 
@@ -108,8 +120,10 @@ def build_chart(
 
     try:
         png_bytes = vlc.vegalite_to_png(vl_spec=spec, scale=2)
+        if len(png_bytes) > MAX_PNG_BYTES:  # keep the image a model receives small
+            png_bytes = vlc.vegalite_to_png(vl_spec=spec, scale=1)
     except Exception as exc:  # noqa: BLE001
-        raise ChartError(f"could not render chart: {exc}") from exc
+        raise ChartError(f"could not render chart: {_short(exc)}") from exc
 
     saved_path = None
     if out_path is not None:
@@ -122,5 +136,6 @@ def build_chart(
         "png_bytes": png_bytes,
         "png_path": saved_path,
         "row_count": result["row_count"],
+        "total_rows": result.get("total_rows"),
         "truncated": result["truncated"],
     }

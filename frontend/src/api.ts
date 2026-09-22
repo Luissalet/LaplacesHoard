@@ -172,25 +172,25 @@ export const api = {
   health: () => get<HealthInfo>("/api/health"),
 
   calc: (expression: string, precision = 15) =>
-    post<CalcResult>("/api/agent/calc", { expression, precision }),
+    post<CalcResult>("/api/ui/calc", { expression, precision }),
 
-  math: (payload: Record<string, unknown>) => post<MathResult>("/api/agent/math", payload),
+  math: (payload: Record<string, unknown>) => post<MathResult>("/api/ui/math", payload),
 
   unitsConvert: (quantity: string, to: string) =>
-    post<UnitsResult>("/api/agent/units_convert", { quantity, to }),
+    post<UnitsResult>("/api/ui/units_convert", { quantity, to }),
 
   unitsCheck: (expression: string) => post<Record<string, unknown>>("/api/units/check", { expression }),
 
-  stats: (payload: Record<string, unknown>) => post<StatsResult>("/api/agent/stats", payload),
+  stats: (payload: Record<string, unknown>) => post<StatsResult>("/api/ui/stats", payload),
 
-  dateCalc: (payload: Record<string, unknown>) => post<DateResult>("/api/agent/date_calc", payload),
+  dateCalc: (payload: Record<string, unknown>) => post<DateResult>("/api/ui/date_calc", payload),
 
   datasets: () => get<{ datasets: DatasetSummary[] }>("/api/datasets"),
   datasetDetail: (name: string) => get<DatasetDetail>(`/api/datasets/${encodeURIComponent(name)}`),
   registerDataset: (path: string, name?: string, options?: Record<string, unknown>) =>
-    post<Record<string, unknown>>("/api/agent/data_register", { path, name, options }),
-  query: (sql: string, limit = 50) => post<QueryResult>("/api/agent/data_query", { sql, limit }),
-  chart: (payload: Record<string, unknown>) => post<ChartResult>("/api/agent/data_chart", payload),
+    post<Record<string, unknown>>("/api/ui/data_register", { path, name, options }),
+  query: (sql: string, limit = 50) => post<QueryResult>("/api/ui/data_query", { sql, limit }),
+  chart: (payload: Record<string, unknown>) => post<ChartResult>("/api/ui/data_chart", payload),
 
   log: (params: { limit?: number; engine?: string; source?: string; query?: string } = {}) => {
     const q = new URLSearchParams();

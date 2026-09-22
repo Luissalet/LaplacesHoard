@@ -10,6 +10,8 @@ from pathlib import Path
 
 import pytest
 
+from conftest import free_port
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MCP_SERVER_PATH = REPO_ROOT / "laplaces_hoard" / "mcp_server.py"
 
@@ -39,8 +41,11 @@ async def test_mcp_lists_all_tools_and_calls_calc_and_data_query(live_app):
             assert expected.issubset(names), f"missing tools: {expected - names}"
 
             for tool in tools_result.tools:
-                if tool.name == "calc":
-                    assert "Keywords:" in (tool.description or "")
+                description = tool.description or ""
+                assert "Keywords:" in description, tool.name
+                assert tool.annotations is not None, tool.name
+                assert tool.annotations.openWorldHint is False, tool.name
+                assert tool.annotations.readOnlyHint is (tool.name != "data_register"), tool.name
 
             calc_result = await session.call_tool("calc", {"expression": "0.1 + 0.2"})
             assert not calc_result.isError
@@ -59,6 +64,30 @@ async def test_mcp_lists_all_tools_and_calls_calc_and_data_query(live_app):
             assert not query_result.isError, query_result.content
             assert '"n"' in query_result.content[0].text or "n" in query_result.content[0].text
 
+            # numbers in a matrix must pass the adapter's own argument validation
+            det = await session.call_tool("math", {"operation": "matrix", "matrix_op": "det", "matrix": [[1, 2], [3, 4]]})
+            assert not det.isError, det.content
+            assert '"-2"' in det.content[0].text
+
+            # errors carry the app's code and actionable message
+            bad = await session.call_tool("data_query", {"sql": "DROP TABLE tiny"})
+            assert bad.isError
+            assert "sql_gate" in bad.content[0].text
+
+            # the chart comes back as an image, and the text part stays small
+            chart = await session.call_tool(
+                "data_chart", {"sql": "SELECT * FROM tiny", "kind": "bar", "x": "id", "y": "value"}
+            )
+            assert not chart.isError, chart.content
+            kinds = [c.type for c in chart.content]
+            assert kinds == ["text", "image"]
+            assert len(chart.content[0].text) < 1000
+            assert "png_base64" not in chart.content[0].text
+
+            log = await session.call_tool("work_log", {"limit": 3})
+            assert not log.isError
+            assert '"cite"' in log.content[0].text
+
 
 @pytest.mark.asyncio
 async def test_mcp_reports_clear_error_when_app_not_running():
@@ -68,7 +97,7 @@ async def test_mcp_reports_clear_error_when_app_not_running():
     params = StdioServerParameters(
         command=sys.executable,
         args=[str(MCP_SERVER_PATH)],
-        env={**os.environ, "LAPLACE_URL": "http://127.0.0.1:18999"},
+        env={**os.environ, "LAPLACE_URL": f"http://127.0.0.1:{free_port()}"},
     )
     async with stdio_client(params) as (read, write):
         async with ClientSession(read, write) as session:

@@ -64,6 +64,17 @@ def connect(data_dir: Path) -> sqlite3.Connection:
     return conn
 
 
+MAX_LOG_JSON = 20000
+
+
+def _capped_json(value: Any) -> str:
+    """JSON for the log, never cut mid-document (a cut string would no longer parse)."""
+    text = json.dumps(value, default=str, ensure_ascii=False)
+    if len(text) <= MAX_LOG_JSON:
+        return text
+    return json.dumps({"truncated": True, "preview": text[: MAX_LOG_JSON - 200]}, ensure_ascii=False)
+
+
 def _now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
@@ -97,8 +108,8 @@ def log_computation(
                 cid,
                 engine,
                 operation,
-                json.dumps(input_data, default=str)[:20000],
-                json.dumps(output_data, default=str)[:20000] if output_data is not None else None,
+                _capped_json(input_data),
+                _capped_json(output_data) if output_data is not None else None,
                 1 if ok else 0,
                 error,
                 elapsed_ms,
@@ -112,7 +123,8 @@ def log_computation(
 
 
 def get_computation(conn: sqlite3.Connection, cid: str) -> Optional[dict]:
-    row = conn.execute("SELECT * FROM computations WHERE id = ?", (cid,)).fetchone()
+    with _lock:
+        row = conn.execute("SELECT * FROM computations WHERE id = ?", (cid,)).fetchone()
     return _row_to_dict(row) if row else None
 
 
@@ -123,12 +135,16 @@ def list_computations(
     engine: Optional[str] = None,
     query: Optional[str] = None,
     source: Optional[str] = None,
+    exclude_engine: Optional[str] = None,
 ) -> list[dict]:
     sql = "SELECT * FROM computations WHERE 1=1"
     params: list[Any] = []
     if engine:
         sql += " AND engine = ?"
         params.append(engine)
+    if exclude_engine:
+        sql += " AND engine != ?"
+        params.append(exclude_engine)
     if source:
         sql += " AND source = ?"
         params.append(source)
@@ -138,8 +154,36 @@ def list_computations(
         params.extend([like, like, query])
     sql += " ORDER BY seq DESC LIMIT ?"
     params.append(max(1, min(limit, 200)))
-    rows = conn.execute(sql, params).fetchall()
+    with _lock:
+        rows = conn.execute(sql, params).fetchall()
     return [_row_to_dict(r) for r in rows]
+
+
+def _clip(value: Any, n: int) -> Optional[str]:
+    if value is None:
+        return None
+    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
+    return text if len(text) <= n else text[:n] + "…"
+
+
+def brief(item: dict, full: bool = False) -> dict:
+    """A work-log entry the way a model should see it: small, with its id."""
+    n_in, n_out = (2000, 4000) if full else (200, 300)
+    out = {
+        "id": item["id"],
+        "cite": f"[{item['id']}]",
+        "engine": item["engine"],
+        "operation": item["operation"],
+        "ok": item["ok"],
+        "source": item["source"],
+        "created_at": item["created_at"],
+        "input": _clip(item.get("input"), n_in),
+    }
+    if item["ok"]:
+        out["result"] = _clip(item.get("output"), n_out)
+    else:
+        out["error"] = _clip(item.get("error"), 300)
+    return out
 
 
 def _row_to_dict(row: sqlite3.Row) -> dict:

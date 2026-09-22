@@ -88,6 +88,16 @@ def _units(op: str, **payload: Any) -> dict:
     return sandbox.run(f"units.{op}", payload, error_cls=UnitsError)
 
 
+def _dataset_brief(d: dict) -> dict:
+    """data_list entry: enough to pick a dataset, small enough for a 27B context."""
+    cols = [c["name"] for c in d.get("columns", [])]
+    out = {"name": d["name"], "kind": d["kind"], "row_count": d["row_count"],
+           "column_count": len(cols), "columns": cols[:30], "source_path": d["source_path"]}
+    if len(cols) > 30:
+        out["columns_truncated"] = True
+    return out
+
+
 class AppState:
     def __init__(self, data_dir: Path):
         self.data_dir = data_dir
@@ -269,19 +279,19 @@ def create_app(data_dir: Path, static_dir: Optional[Path] = None, port: int = 88
                 detail={"error": "internal_error", "message": f"unexpected failure in {engine}.{operation}: {message}"},
             ) from exc
         elapsed = (time.monotonic() - start) * 1000
+        # "_chart_path" goes to its own column; "_response_extra" (PNG bytes,
+        # full chart spec) is returned but never written to the work log.
         chart_path = output.get("_chart_path") if isinstance(output, dict) else None
-        loggable = {k: v for k, v in output.items() if k != "_chart_path"} if isinstance(output, dict) else output
+        extra = output.get("_response_extra", {}) if isinstance(output, dict) else {}
+        loggable = {k: v for k, v in output.items() if not k.startswith("_")} if isinstance(output, dict) else output
         cid = db.log_computation(
             state.conn, engine=engine, operation=operation, input_data=input_data,
             output_data=loggable, ok=True, error=None, elapsed_ms=elapsed, source=source,
             chart_path=chart_path,
         )
         if isinstance(output, dict):
-            return {**loggable, "id": cid, "cite": f"[{cid}]"}
-        return {"result": output, "id": cid, "cite": f"[{cid}]"}
-
-    def agent(engine: str, operation: str, input_data: Any, fn):
-        return _record(engine, operation, input_data, "agent", fn)
+            return {"id": cid, "cite": f"[{cid}]", **loggable, **extra}
+        return {"id": cid, "cite": f"[{cid}]", "result": output}
 
     def ui(engine: str, operation: str, input_data: Any, fn):
         return _record(engine, operation, input_data, "ui", fn)
@@ -304,82 +314,106 @@ def create_app(data_dir: Path, static_dir: Optional[Path] = None, port: int = 88
         }
 
     # ------------------------------------------------------------------ #
-    # agent-facing operations  (POST /api/agent/<tool>)
+    # tool operations: POST /api/agent/<tool> (the MCP adapter, logged as
+    # source "agent") and the identical POST /api/ui/<tool> (the web UI,
+    # logged as "ui") — so "Assistant activity" only ever shows the model.
     # ------------------------------------------------------------------ #
 
-    @app.post("/api/agent/calc")
-    def agent_calc(body: CalcBody):
-        return agent("calc", "compute", body.model_dump(), lambda: _calc(body.expression, body.precision))
+    def _mount_tools(prefix: str, source: str) -> None:
+        def rec(engine: str, operation: str, input_data: Any, fn):
+            return _record(engine, operation, input_data, source, fn)
 
-    @app.post("/api/agent/math")
-    def agent_math(body: MathBody):
-        payload = body.model_dump(exclude_none=True)
-        op = payload.pop("operation")
-        timeout = payload.pop("timeout", 10.0)
-        if "expressions" not in payload and "expression" in payload and op == "solve":
-            payload["expressions"] = [payload.pop("expression")]
-        return agent("math", op, body.model_dump(), lambda: symbolic.run(op, timeout=timeout, **payload))
+        @app.post(f"{prefix}/calc", name=f"{source}_calc")
+        def tool_calc(body: CalcBody):
+            return rec("calc", "compute", body.model_dump(), lambda: _calc(body.expression, body.precision))
 
-    @app.post("/api/agent/units_convert")
-    def agent_units_convert(body: UnitsConvertBody):
-        return agent("units", "convert", body.model_dump(), lambda: _units("convert", quantity=body.quantity, to=body.to))
+        @app.post(f"{prefix}/math", name=f"{source}_math")
+        def tool_math(body: MathBody):
+            payload = body.model_dump(exclude_none=True)
+            op = payload.pop("operation")
+            timeout = payload.pop("timeout", 10.0)
+            if "expressions" not in payload and "expression" in payload and op == "solve":
+                payload["expressions"] = [payload.pop("expression")]
+            return rec("math", op, body.model_dump(exclude_none=True), lambda: symbolic.run(op, timeout=timeout, **payload))
 
-    @app.post("/api/agent/stats")
-    def agent_stats(body: StatsBody):
-        payload = body.model_dump(exclude={"test"})
-        return agent(
-            "stats", body.test, body.model_dump(),
-            lambda: stats.run(body.test, catalog=state.catalog, **payload),
+        @app.post(f"{prefix}/units_convert", name=f"{source}_units_convert")
+        def tool_units_convert(body: UnitsConvertBody):
+            return rec("units", "convert", body.model_dump(),
+                       lambda: _units("convert", quantity=body.quantity, to=body.to))
+
+        @app.post(f"{prefix}/stats", name=f"{source}_stats")
+        def tool_stats(body: StatsBody):
+            payload = body.model_dump(exclude={"test"})
+            return rec("stats", body.test, body.model_dump(exclude_none=True),
+                       lambda: stats.run(body.test, catalog=state.catalog, **payload))
+
+        @app.post(f"{prefix}/date_calc", name=f"{source}_date_calc")
+        def tool_date_calc(body: DateCalcBody):
+            return rec("dates", body.operation, body.model_dump(exclude_none=True), lambda: _dispatch_date(body))
+
+        @app.post(f"{prefix}/data_list", name=f"{source}_data_list")
+        def tool_data_list():
+            return rec("data", "list", {}, lambda: {"datasets": [_dataset_brief(d) for d in state.catalog.list_datasets()]})
+
+        @app.post(f"{prefix}/data_register", name=f"{source}_data_register")
+        def tool_data_register(body: DataRegisterBody):
+            return rec("data", "register", body.model_dump(),
+                       lambda: state.catalog.register(body.path, body.name, body.options))
+
+        @app.post(f"{prefix}/data_describe", name=f"{source}_data_describe")
+        def tool_data_describe(body: DataDescribeBody):
+            return rec("data", "describe", body.model_dump(), lambda: state.catalog.describe(body.name))
+
+        @app.post(f"{prefix}/data_query", name=f"{source}_data_query")
+        def tool_data_query(body: DataQueryBody):
+            return rec("data", "query", body.model_dump(), lambda: state.catalog.query(body.sql, body.limit))
+
+        @app.post(f"{prefix}/data_chart", name=f"{source}_data_chart")
+        def tool_data_chart(body: DataChartBody):
+            return rec("data", "chart", body.model_dump(), lambda: _chart(body, include_spec=(source == "ui")))
+
+    def _chart(body: "DataChartBody", include_spec: bool) -> dict:
+        out_path = state.data_dir / "charts" / f"chart_{time.time_ns()}.png"
+        result = charts.build_chart(
+            state.catalog, body.sql, body.kind, body.x, body.y, body.color, body.title, out_path=out_path
         )
+        spec = result["spec"]
+        extra: dict[str, Any] = {"png_base64": base64.b64encode(result["png_bytes"]).decode("ascii")}
+        if include_spec:
+            extra["spec"] = spec  # the UI re-renders it interactively; the model gets the image
+        return {
+            "kind": body.kind,
+            "spec_summary": {
+                "mark": spec["mark"]["type"],
+                "encoding": {k: v.get("field") or v.get("aggregate") for k, v in spec["encoding"].items()},
+                "title": body.title,
+            },
+            "row_count": result["row_count"],
+            "total_rows": result.get("total_rows"),
+            "truncated": result["truncated"],
+            "png_bytes": len(result["png_bytes"]),
+            "_chart_path": str(out_path),
+            "_response_extra": extra,
+        }
 
-    @app.post("/api/agent/date_calc")
-    def agent_date_calc(body: DateCalcBody):
-        return agent("dates", body.operation, body.model_dump(), lambda: _dispatch_date(body))
-
-    @app.post("/api/agent/data_list")
-    def agent_data_list():
-        return agent("data", "list", {}, lambda: {"datasets": state.catalog.list_datasets()})
-
-    @app.post("/api/agent/data_register")
-    def agent_data_register(body: DataRegisterBody):
-        return agent(
-            "data", "register", body.model_dump(),
-            lambda: state.catalog.register(body.path, body.name, body.options),
-        )
-
-    @app.post("/api/agent/data_describe")
-    def agent_data_describe(body: DataDescribeBody):
-        return agent("data", "describe", body.model_dump(), lambda: state.catalog.describe(body.name))
-
-    @app.post("/api/agent/data_query")
-    def agent_data_query(body: DataQueryBody):
-        return agent("data", "query", body.model_dump(), lambda: state.catalog.query(body.sql, body.limit))
-
-    @app.post("/api/agent/data_chart")
-    def agent_data_chart(body: DataChartBody):
-        def _run():
-            chart_dir = state.data_dir / "charts"
-            out_path = chart_dir / f"chart_{int(time.time() * 1000)}.png"
-            result = charts.build_chart(
-                state.catalog, body.sql, body.kind, body.x, body.y, body.color, body.title, out_path=out_path
-            )
-            return {
-                "spec": result["spec"],
-                "spec_summary": {
-                    "mark": result["spec"]["mark"],
-                    "encoding": list(result["spec"]["encoding"].keys()),
-                },
-                "row_count": result["row_count"],
-                "truncated": result["truncated"],
-                "png_base64": base64.b64encode(result["png_bytes"]).decode("ascii"),
-                "_chart_path": str(out_path),
-            }
-        return agent("data", "chart", body.model_dump(), _run)
+    _mount_tools("/api/agent", "agent")
+    _mount_tools("/api/ui", "ui")
 
     @app.post("/api/agent/work_log")
     def agent_work_log(body: WorkLogQuery):
-        items = db.list_computations(state.conn, limit=body.limit, engine=body.engine, query=body.query)
-        return {"items": items, "count": len(items)}
+        def _run():
+            limit = max(1, min(body.limit, 50))
+            query = (body.query or "").strip() or None
+            if query and re.fullmatch(r"\[?L-\d{6}\]?", query):
+                item = db.get_computation(state.conn, query.strip("[]"))
+                if item is None:
+                    raise DataError(f"no computation with id {query}")
+                return {"items": [db.brief(item, full=True)], "count": 1, "has_more": False}
+            rows = db.list_computations(state.conn, limit=limit + 1, engine=body.engine, query=query,
+                                        exclude_engine=None if body.engine else "log")
+            return {"items": [db.brief(r) for r in rows[:limit]], "count": min(len(rows), limit),
+                    "has_more": len(rows) > limit}
+        return _record("log", "search", body.model_dump(exclude_none=True), "agent", _run)
 
     # ------------------------------------------------------------------ #
     # UI-facing richer endpoints

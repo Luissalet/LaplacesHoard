@@ -146,3 +146,55 @@ def test_rerun_of_a_units_check_reruns_the_check(client):
     first = client.post("/api/units/check", json={"expression": "3 m/s * 2 s"}).json()
     again = client.post(f"/api/log/{first['id']}/rerun").json()
     assert again["dimensionality"] == "[length]"
+
+
+def test_ui_routes_are_not_logged_as_the_assistant(client):
+    # the web UI used to call /api/agent/*, so the human's own clicks showed up
+    # under "Assistant activity"
+    ui = client.post("/api/ui/calc", json={"expression": "1+1"}).json()
+    agent = client.post("/api/agent/calc", json={"expression": "2+2"}).json()
+    agent_ids = {i["id"] for i in client.get("/api/agent-calls").json()["items"]}
+    assert agent["id"] in agent_ids and ui["id"] not in agent_ids
+    assert client.get(f"/api/log/{ui['id']}").json()["source"] == "ui"
+
+
+def test_agent_chart_result_is_compact_and_log_stays_valid(client, sample_csv):
+    client.post("/api/agent/data_register", json={"path": str(sample_csv), "name": "sample"})
+    body = {"sql": "SELECT region, SUM(amount) AS total FROM sample GROUP BY region", "kind": "bar",
+            "x": "region", "y": "total"}
+    agent = client.post("/api/agent/data_chart", json=body).json()
+    assert "spec" not in agent and agent["png_base64"]
+    assert agent["spec_summary"]["encoding"] == {"x": "region", "y": "total"}
+    ui = client.post("/api/ui/data_chart", json=body).json()
+    assert ui["spec"]["data"]["values"]
+    logged = client.get(f"/api/log/{agent['id']}").json()
+    assert logged["output"] is not None and "png_base64" not in logged["output"]
+    assert logged["chart_path"].endswith(".png")
+
+
+def test_data_list_for_the_agent_is_compact(client, sample_csv):
+    client.post("/api/agent/data_register", json={"path": str(sample_csv), "name": "sample"})
+    ds = client.post("/api/agent/data_list").json()["datasets"]
+    assert ds == [{"name": "sample", "kind": "csv", "row_count": 6, "column_count": 2,
+                   "columns": ["region", "amount"], "source_path": str(sample_csv.resolve())}]
+
+
+def test_work_log_items_are_short_and_lookup_by_id_is_full(client):
+    first = client.post("/api/agent/calc", json={"expression": "factorial(400)"}).json()
+    log = client.post("/api/agent/work_log", json={"limit": 5}).json()
+    item = log["items"][0]
+    assert item["id"] == first["id"] and item["cite"] == first["cite"]
+    assert len(item["result"]) <= 301
+    full = client.post("/api/agent/work_log", json={"query": f"[{first['id']}]"}).json()
+    assert full["count"] == 1 and len(full["items"][0]["result"]) > 800
+
+
+def test_oversized_log_output_is_stored_as_valid_json(data_dir):
+    from laplaces_hoard import db
+
+    conn = db.connect(data_dir)
+    cid = db.log_computation(conn, engine="x", operation="y", input_data={"a": 1},
+                             output_data={"blob": "z" * 50000}, ok=True, error=None,
+                             elapsed_ms=1.0, source="ui")
+    item = db.get_computation(conn, cid)
+    assert item["output"]["truncated"] is True
