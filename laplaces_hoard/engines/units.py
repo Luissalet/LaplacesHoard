@@ -36,6 +36,48 @@ def _fmt(x: float) -> str:
 
 _COMPOUND_TOKEN = re.compile(r"(-?\d+(?:\.\d+)?)\s*([A-Za-zµ°]+)")
 
+# A number written with a decimal comma and no dot anywhere in the text
+# ("3,5 km"): Pint silently reads "3,5" as 35 (it just drops the comma), so
+# this is normalised to "3.5" before Pint ever sees it. Only applied when
+# there is no '.' in the text at all, so an already-unambiguous number is
+# never second-guessed.
+_DECIMAL_COMMA = re.compile(r"(?<!\d)(-?\d+),(\d+)(?!\d)")
+
+# Spanish names for common units, mapped to the English/symbol names Pint
+# understands. Matched as whole words so "metros" -> "meter" but a unit that
+# already has no Spanish counterpart (km, kg, mph...) passes through as-is.
+_SPANISH_UNITS = {
+    "metros": "meter", "metro": "meter", "kilometros": "kilometer", "kilómetros": "kilometer",
+    "kilometro": "kilometer", "kilómetro": "kilometer", "centimetros": "centimeter",
+    "centímetros": "centimeter", "centimetro": "centimeter", "centímetro": "centimeter",
+    "milimetros": "millimeter", "milímetros": "millimeter", "milimetro": "millimeter",
+    "milímetro": "millimeter", "millas": "mile", "milla": "mile", "pies": "foot", "pie": "foot",
+    "pulgadas": "inch", "pulgada": "inch", "yardas": "yard", "yarda": "yard",
+    "libras": "pound", "libra": "pound", "onzas": "ounce", "onza": "ounce",
+    "kilogramos": "kilogram", "kilogramo": "kilogram", "gramos": "gram", "gramo": "gram",
+    "toneladas": "metric_ton", "tonelada": "metric_ton",
+    "litros": "liter", "litro": "liter", "mililitros": "milliliter", "mililitro": "milliliter",
+    "galones": "gallon", "galon": "gallon", "galón": "gallon",
+    "segundos": "second", "segundo": "second", "minutos": "minute", "minuto": "minute",
+    "horas": "hour", "hora": "hour", "dias": "day", "días": "day", "dia": "day", "día": "day",
+    "semanas": "week", "semana": "week",
+    "vatios": "watt", "vatio": "watt", "julios": "joule", "julio": "joule",
+    "bares": "bar",
+}
+_SPANISH_UNIT_RE = re.compile(
+    r"\b(" + "|".join(sorted(_SPANISH_UNITS, key=len, reverse=True)) + r")\b", re.IGNORECASE
+)
+
+
+def _normalize_decimal_comma(text: str) -> str:
+    if "." in text:
+        return text
+    return _DECIMAL_COMMA.sub(r"\1.\2", text)
+
+
+def _translate_spanish_units(text: str) -> str:
+    return _SPANISH_UNIT_RE.sub(lambda m: _SPANISH_UNITS[m.group(0).lower()], text)
+
 
 class UnitsError(ValueError):
     pass
@@ -67,7 +109,7 @@ def _guard_powers(text: str) -> None:
 def _parse_quantity(text: str) -> "pint.Quantity":
     _reject_currency(text)
     _guard_powers(text)
-    text = text.strip()
+    text = _translate_spanish_units(_normalize_decimal_comma(text.strip()))
     matches = _COMPOUND_TOKEN.findall(text)
     reconstructed = " ".join(f"{n} {u}".strip() for n, u in matches)
     if matches and len(matches) > 1 and reconstructed.replace("  ", " ") == text.replace("  ", " "):
@@ -86,6 +128,7 @@ def convert(quantity: str, to: str) -> dict[str, Any]:
     q = _parse_quantity(quantity)
     _reject_currency(to)
     _guard_powers(to)
+    to = _translate_spanish_units(to.strip())
     try:
         target = _ureg.Unit(to)
     except Exception as exc:  # noqa: BLE001
@@ -118,6 +161,7 @@ def convert(quantity: str, to: str) -> dict[str, Any]:
 def check(expression: str) -> dict[str, Any]:
     """Check dimensional consistency, e.g. `"3 m/s * 2 s" -> length` OK, wrong units flagged."""
     _guard_powers(expression)
+    expression = _translate_spanish_units(_normalize_decimal_comma(expression.strip()))
     try:
         q = _ureg.parse_expression(expression)
     except pint.DimensionalityError as exc:
@@ -138,6 +182,7 @@ def check(expression: str) -> dict[str, Any]:
 
 
 def compatible(unit: str) -> dict[str, Any]:
+    unit = _translate_spanish_units(unit.strip())
     try:
         u = _ureg.Unit(unit)
     except Exception as exc:  # noqa: BLE001

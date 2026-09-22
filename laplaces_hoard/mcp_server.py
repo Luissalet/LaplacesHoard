@@ -196,11 +196,14 @@ def units_convert(quantity: str, to: str) -> dict:
 
     Handles compound inputs ("5 ft 11 in" to "cm"), temperatures with their
     offsets ("100 degF" to "degC" is 37.78, not a plain scale), and derived
-    units (kWh, psi, mph, g/cm**3). Unit names are
-    English/SI symbols: m, km, mi, ft, in, kg, lb, g, L, gal, degC, degF, K,
-    s, min, h, km/h, mph, J, kWh, W, Pa, bar, psi. No currencies (rates need
-    the network). Returns {id, cite, to_magnitude, to_unit, formatted}
-    rounded to 12 significant digits. Cite as its `cite`, e.g. [L-000042].
+    units (kWh, psi, mph, g/cm**3). Unit names are English/SI symbols (m,
+    km, mi, ft, in, kg, lb, g, L, gal, degC, degF, K, s, min, h, km/h, mph,
+    J, kWh, W, Pa, bar, psi) or their common Spanish names (metros,
+    kilómetros, millas, pies, pulgadas, libras, kilogramos, litros, horas,
+    minutos...). A decimal comma with no dot in the input ("3,5 km") is read
+    as 3.5, not 35. No currencies (rates need the network). Returns {id,
+    cite, to_magnitude, to_unit, formatted} rounded to 12 significant
+    digits. Cite as its `cite`, e.g. [L-000042].
 
     Keywords: convert, how many, in meters, in kilograms, miles to km,
     pounds to kilos, temperature, fahrenheit, celsius, convertir, cuántos,
