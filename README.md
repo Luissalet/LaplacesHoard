@@ -118,7 +118,7 @@ guard.
 .venv\Scripts\python -m pytest -q
 ```
 
-166 tests, offline, about 35 seconds. They cover the AST whitelist
+174 tests, offline, about 35 seconds. They cover the AST whitelist
 (`__import__`, attributes, lambdas, comprehensions), exact decimals and
 rounding, precision up to 1000 digits, runaway and memory-bomb inputs
 (timeout, recovery, refusal), concurrent calls through the worker, `solve`
@@ -135,9 +135,11 @@ listing tools (keywords and annotations on each) and calling `calc`,
 `data_register`, `data_query`, `math`, `data_chart` (image returned) and
 `work_log`; the shared model backend's status/config endpoints (a token
 is never echoed back) and "Ask your data" against a mocked language model
-(`httpx.MockTransport`): a good SQL answer, one retry after a failing
-query, a clear error when the model does not answer in SQL, and the
-honest "unavailable" state with no model resolved.
+(`httpx.MockTransport`): what the prompt contains (schema, at most 5 sample
+rows), a good SQL answer, one retry that carries the error, a clear error
+when the model does not answer in SQL, and the honest "unavailable" state
+with no model resolved; saved overrides can be cleared, a config the form
+never sends is refused, and a broken `backend.json` does not stop the app.
 
 ## Privacy and limits
 

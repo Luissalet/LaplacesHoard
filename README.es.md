@@ -124,7 +124,7 @@ al navegador.
 .venv\Scripts\python -m pytest -q
 ```
 
-166 tests, sin red, unos 35 segundos. Cubren la lista blanca del AST
+174 tests, sin red, unos 35 segundos. Cubren la lista blanca del AST
 (`__import__`, atributos, lambdas, comprensiones), decimales y redondeo
 exactos, precisión de hasta 1000 cifras, entradas desbocadas o que agotan
 la memoria (límite de tiempo, recuperación, rechazo), llamadas simultáneas
@@ -144,9 +144,12 @@ clave y anotaciones en cada una) y llamando a `calc`, `data_register`,
 `data_query`, `math`, `data_chart` (devuelve la imagen) y `work_log`; los
 endpoints de estado y configuración del modelo compartido (el token nunca
 se devuelve) y "Pregunta a tus datos" contra un modelo de lenguaje simulado
-(`httpx.MockTransport`): una respuesta SQL correcta, un reintento tras una
-consulta fallida, un error claro cuando el modelo no responde en SQL, y el
-estado honesto de "no disponible" sin ningún modelo resuelto.
+(`httpx.MockTransport`): qué contiene el prompt (esquema y como mucho 5
+filas de muestra), una respuesta SQL correcta, un reintento que incluye el
+error, un error claro cuando el modelo no responde en SQL y el estado
+honesto de "no disponible" sin ningún modelo resuelto; la configuración
+guardada se puede borrar, se rechaza la que el formulario nunca envía y un
+`backend.json` estropeado no impide arrancar la aplicación.
 
 ## Privacidad y límites
 
