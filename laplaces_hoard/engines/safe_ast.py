@@ -46,12 +46,24 @@ def _ratio(a, b):
     return a / b
 
 
+def _values(name: str, args: tuple) -> list:
+    """Accept both f(1, 2, 3) and f([1, 2, 3]) for the aggregate helpers."""
+    if len(args) == 1 and isinstance(args[0], list):
+        args = tuple(args[0])
+    if not args:
+        raise UnsafeExpressionError(f"{name}() needs at least one value")
+    if any(isinstance(a, list) for a in args):
+        raise UnsafeExpressionError(f"{name}() takes numbers or one list of numbers")
+    return list(args)
+
+
 def _mean(*args):
-    return sympy.Add(*args) / len(args)
+    vals = _values("mean", args)
+    return sympy.Add(*vals) / len(vals)
 
 
 def _median(*args):
-    vals = sorted(args, key=lambda v: sympy.N(v))
+    vals = sorted(_values("median", args), key=lambda v: sympy.N(v))
     n = len(vals)
     mid = n // 2
     if n % 2:
@@ -73,6 +85,25 @@ def _atan2(y, x):
 
 def _mod(a, b):
     return sympy.Mod(a, b)
+
+
+def _round(x, *n):
+    """Exact rounding, half away from zero (how people and spreadsheets round).
+
+    round(2.5) = 3, round(-2.5) = -3, round(1.005, 2) = 1.01 — the literal is
+    already an exact rational, so no binary-float surprise can creep in.
+    """
+    if len(n) > 1:
+        raise UnsafeExpressionError("round() takes a value and an optional number of decimals")
+    digits = n[0] if n else sympy.Integer(0)
+    if not getattr(digits, "is_integer", False):
+        raise UnsafeExpressionError("round(x, n): n must be a whole number of decimals")
+    if not getattr(x, "is_real", False):
+        raise UnsafeExpressionError("round() needs a real number")
+    scale = sympy.Integer(10) ** digits
+    q = x * scale
+    rounded = sympy.sign(q) * sympy.floor(sympy.Abs(q) + sympy.Rational(1, 2))
+    return rounded / scale
 
 
 def _isprime(n):
@@ -104,17 +135,17 @@ FUNCTIONS: dict[str, Callable] = {
     "tanh": sympy.tanh,
     "floor": sympy.floor,
     "ceil": sympy.ceiling,
-    "round": lambda x, *n: sympy.Integer(round(float(x), int(n[0]) if n else 0)) if not n else sympy.Rational(round(float(x), int(n[0]))),
+    "round": _round,
     "abs": sympy.Abs,
-    "min": lambda *a: sympy.Min(*a),
-    "max": lambda *a: sympy.Max(*a),
-    "sum": lambda *a: sympy.Add(*a),
+    "min": lambda *a: sympy.Min(*_values("min", a)),
+    "max": lambda *a: sympy.Max(*_values("max", a)),
+    "sum": lambda *a: sympy.Add(*_values("sum", a)),
     "mean": _mean,
     "median": _median,
     "factorial": sympy.factorial,
     "binomial": sympy.binomial,
-    "gcd": lambda *a: sympy.gcd(list(a)),
-    "lcm": lambda *a: sympy.lcm(list(a)),
+    "gcd": lambda *a: sympy.gcd(_values("gcd", a)),
+    "lcm": lambda *a: sympy.lcm(_values("lcm", a)),
     "mod": _mod,
     "pct": _pct,
     "pct_change": _pct_change,
@@ -145,6 +176,7 @@ _ALLOWED_NODES = (
     ast.FloorDiv,
     ast.Mod,
     ast.Pow,
+    ast.BitXor,
     ast.USub,
     ast.UAdd,
     ast.Lt,
@@ -163,6 +195,8 @@ _BINOPS = {
     ast.FloorDiv: lambda a, b: sympy.floor(a / b),
     ast.Mod: lambda a, b: sympy.Mod(a, b),
     ast.Pow: lambda a, b: a ** b,
+    # `^` means power to every human and every calculator; nobody asks for XOR here.
+    ast.BitXor: lambda a, b: a ** b,
 }
 
 _CMPOPS = {
@@ -274,6 +308,8 @@ def parse_expression(
                 raise UnsafeExpressionError(f"unsupported operator: {op_type.__name__}")
             left = visit(node.left)
             right = visit(node.right)
+            if isinstance(left, list) or isinstance(right, list):
+                raise UnsafeExpressionError("arithmetic on a list is not supported; use sum(...), mean(...) etc.")
             return _BINOPS[op_type](left, right)
         if isinstance(node, ast.Compare):
             if len(node.ops) != 1 or len(node.comparators) != 1:
@@ -298,6 +334,10 @@ def parse_expression(
             if name in RAW_FUNCTIONS:
                 if raw_result is None:
                     raise UnsafeExpressionError(f"'{name}' is not allowed here")
+                if node is not tree.body:
+                    raise UnsafeExpressionError(
+                        f"{name}(...) must be the whole expression, e.g. {name}(97); compute other parts in a separate call"
+                    )
                 raw_result["kind"] = name
                 raw_result["args"] = args
                 return sympy.Integer(0)
@@ -305,7 +345,9 @@ def parse_expression(
                 raise UnsafeExpressionError(f"unknown function: {name}")
             try:
                 return FUNCTIONS[name](*args)
-            except TypeError as exc:
+            except UnsafeExpressionError:
+                raise
+            except (TypeError, ValueError, AttributeError) as exc:
                 raise UnsafeExpressionError(f"wrong arguments for {name}(): {exc}") from exc
         if isinstance(node, (ast.Tuple, ast.List)):
             return [visit(e) for e in node.elts]

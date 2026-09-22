@@ -10,10 +10,11 @@ from __future__ import annotations
 import base64
 import logging
 import re
+import threading
 import time
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
@@ -23,7 +24,8 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from pydantic import BaseModel, Field
 
 from . import db
-from .engines import calc, charts, dates, stats, symbolic, units
+from .engines import calc, charts, dates, sandbox, stats, symbolic, units
+from .engines.calc import CalcError
 from .engines.data import Catalog, DataError, SQLGateError
 from .engines.safe_ast import UnsafeExpressionError
 from .engines.stats import StatsError
@@ -38,7 +40,7 @@ SERVICE_SLUG = "laplaces-hoard"
 DISPLAY_NAME = "Laplace's Hoard"
 
 _ENGINE_ERRORS = (
-    UnsafeExpressionError, SymbolicError, UnitsError, DateError,
+    UnsafeExpressionError, CalcError, SymbolicError, UnitsError, DateError,
     StatsError, DataError, SQLGateError, ChartError,
 )
 
@@ -74,6 +76,16 @@ def _validation_message(exc: RequestValidationError) -> str:
         loc = ".".join(str(x) for x in err.get("loc", ()) if x != "body")
         parts.append(f"{loc or 'body'}: {err.get('msg', 'invalid')}")
     return "invalid arguments: " + "; ".join(parts)
+
+
+def _calc(expression: str, precision: int = 15) -> dict:
+    """calc runs in the timeout worker: `9**9**9**9` must not pin a server thread."""
+    return sandbox.run("calc", {"expression": expression, "precision": precision}, error_cls=CalcError)
+
+
+def _units(op: str, **payload: Any) -> dict:
+    """Pint evaluates `**` too ("10**10**10 m"), so units share the same worker."""
+    return sandbox.run(f"units.{op}", payload, error_cls=UnitsError)
 
 
 class AppState:
@@ -113,10 +125,10 @@ class MathBody(BaseModel):
     direction: Optional[str] = None
     x0: Optional[float] = None
     matrix_op: Optional[str] = None
-    matrix: Optional[list[list[str]]] = None
-    matrix2: Optional[list[list[str]]] = None
+    matrix: Optional[list[list[Union[str, int, float]]]] = None
+    matrix2: Optional[list[list[Union[str, int, float]]]] = None
     function: Optional[str] = None
-    timeout: float = 10.0
+    timeout: float = Field(default=10.0, ge=0.1, le=60.0)
 
 
 class UnitsConvertBody(BaseModel):
@@ -204,6 +216,9 @@ def create_app(data_dir: Path, static_dir: Optional[Path] = None, port: int = 88
     state = AppState(data_dir)
 
     _setup_logging(data_dir)
+    # start the computation worker now (SymPy/Pint imports take seconds on
+    # Windows) so the model's first calc call does not pay for it
+    threading.Thread(target=sandbox.warm_up, name="laplace-warmup", daemon=True).start()
     app = FastAPI(title=DISPLAY_NAME, version=__version__)
     app.add_middleware(BrowserGuardMiddleware, port=port)
     app.state.lh = state
@@ -293,7 +308,7 @@ def create_app(data_dir: Path, static_dir: Optional[Path] = None, port: int = 88
 
     @app.post("/api/agent/calc")
     def agent_calc(body: CalcBody):
-        return agent("calc", "compute", body.model_dump(), lambda: calc.compute(body.expression, body.precision))
+        return agent("calc", "compute", body.model_dump(), lambda: _calc(body.expression, body.precision))
 
     @app.post("/api/agent/math")
     def agent_math(body: MathBody):
@@ -306,7 +321,7 @@ def create_app(data_dir: Path, static_dir: Optional[Path] = None, port: int = 88
 
     @app.post("/api/agent/units_convert")
     def agent_units_convert(body: UnitsConvertBody):
-        return agent("units", "convert", body.model_dump(), lambda: units.convert(body.quantity, body.to))
+        return agent("units", "convert", body.model_dump(), lambda: _units("convert", quantity=body.quantity, to=body.to))
 
     @app.post("/api/agent/stats")
     def agent_stats(body: StatsBody):
@@ -388,8 +403,8 @@ def create_app(data_dir: Path, static_dir: Optional[Path] = None, port: int = 88
         engine_name = item["engine"]
         input_data = item["input"] or {}
         dispatch = {
-            "calc": lambda: calc.compute(input_data.get("expression", ""), input_data.get("precision", 15)),
-            "units": lambda: units.convert(input_data.get("quantity", ""), input_data.get("to", "")),
+            "calc": lambda: _calc(input_data.get("expression", ""), input_data.get("precision", 15)),
+            "units": lambda: _rerun_units(item["operation"], input_data),
             "dates": lambda: _dispatch_date_dict(item["operation"], input_data),
             "data": lambda: _rerun_data(item["operation"], input_data),
         }
@@ -420,11 +435,11 @@ def create_app(data_dir: Path, static_dir: Optional[Path] = None, port: int = 88
 
     @app.post("/api/units/check")
     def units_check(body: UnitsCheckBody):
-        return ui("units", "check", body.model_dump(), lambda: units.check(body.expression))
+        return ui("units", "check", body.model_dump(), lambda: _units("check", expression=body.expression))
 
     @app.get("/api/units/compatible")
     def units_compatible(unit: str):
-        return ui("units", "compatible", {"unit": unit}, lambda: units.compatible(unit))
+        return ui("units", "compatible", {"unit": unit}, lambda: _units("compatible", unit=unit))
 
     @app.get("/api/agent-calls")
     def agent_calls(limit: int = 20):
@@ -456,15 +471,17 @@ def create_app(data_dir: Path, static_dir: Optional[Path] = None, port: int = 88
 
     def _run_cell(engine_name: str, text: str) -> dict:
         if engine_name == "calc":
-            return ui("calc", "compute", {"expression": text}, lambda: calc.compute(text))
+            return ui("calc", "compute", {"expression": text}, lambda: _calc(text))
         if engine_name == "math":
-            return ui("math", "simplify", {"expression": text}, lambda: symbolic.run("simplify", expression=text))
+            op, payload = symbolic.parse_cell(text)
+            return ui("math", op, {"operation": op, **payload}, lambda: symbolic.run(op, **payload))
         if engine_name == "units":
-            if "->" in text:
-                q, to = text.split("->", 1)
-                return ui("units", "convert", {"quantity": q.strip(), "to": to.strip()},
-                           lambda: units.convert(q.strip(), to.strip()))
-            return ui("units", "check", {"expression": text}, lambda: units.check(text))
+            for sep in ("->", "→", " to ", " en "):
+                if sep in text:
+                    q, to = text.split(sep, 1)
+                    return ui("units", "convert", {"quantity": q.strip(), "to": to.strip()},
+                              lambda: _units("convert", quantity=q.strip(), to=to.strip()))
+            return ui("units", "check", {"expression": text}, lambda: _units("check", expression=text))
         if engine_name == "dates":
             return ui("dates", "parse", {"text": text}, lambda: dates.parse(text))
         raise HTTPException(status_code=400, detail={"error": "unknown_engine", "message": f"unknown cell engine {engine_name}"})
@@ -490,6 +507,13 @@ def create_app(data_dir: Path, static_dir: Optional[Path] = None, port: int = 88
         if operation == "parse":
             return dates.parse(d.get("text") or d.get("value", ""))
         raise DateError(f"unknown date operation: {operation}")
+
+    def _rerun_units(operation: str, input_data: dict) -> dict:
+        if operation == "check":
+            return _units("check", expression=input_data.get("expression", ""))
+        if operation == "compatible":
+            return _units("compatible", unit=input_data.get("unit", ""))
+        return _units("convert", quantity=input_data.get("quantity", ""), to=input_data.get("to", ""))
 
     def _rerun_data(operation: str, input_data: dict) -> dict:
         if operation == "query":

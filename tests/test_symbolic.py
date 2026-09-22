@@ -61,8 +61,10 @@ def test_symbolic_run_timeout_reports_as_error_not_a_hang(monkeypatch):
     """Deterministic version of the real 'SymPy can hang' scenario: force the
     dispatch to always be slow, and check `run()` surfaces it as a
     SymbolicError (not a hang) within the requested timeout."""
+    from laplaces_hoard.engines import sandbox
+
     fake_worker = TimeoutWorker(_always_slow, timeout=10)
-    monkeypatch.setattr(symbolic, "_worker", fake_worker)
+    monkeypatch.setattr(sandbox, "_worker", fake_worker)
     start = time.time()
     with pytest.raises(symbolic.SymbolicError):
         symbolic.run("simplify", expression="x", timeout=0.3)

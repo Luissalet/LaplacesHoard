@@ -14,9 +14,11 @@ call — the worker "self-heals" instead of wedging the app.
 from __future__ import annotations
 
 import multiprocessing as mp
+import threading
 from typing import Any, Callable, Optional
 
 _CTX = mp.get_context("spawn")
+STARTUP_TIMEOUT_S = 60.0
 
 
 class WorkerTimeout(RuntimeError):
@@ -24,10 +26,19 @@ class WorkerTimeout(RuntimeError):
 
 
 class WorkerError(RuntimeError):
-    pass
+    """The target raised inside the worker. `kind` is the exception class name."""
+
+    def __init__(self, message: str, kind: str = "WorkerError"):
+        super().__init__(message)
+        self.kind = kind
+        self.message = message
 
 
 def _loop(target: Callable[[str, dict], dict], conn) -> None:
+    # `target` was unpickled (so its module, e.g. SymPy, imported) before we got
+    # here: tell the parent we are ready, so start-up time never eats into the
+    # first call's timeout.
+    conn.send(("ready", None))
     while True:
         try:
             msg = conn.recv()
@@ -40,7 +51,7 @@ def _loop(target: Callable[[str, dict], dict], conn) -> None:
             result = target(op, payload)
             conn.send(("ok", result))
         except Exception as exc:  # noqa: BLE001 - report any failure to the parent
-            conn.send(("error", f"{type(exc).__name__}: {exc}"))
+            conn.send(("error", (type(exc).__name__, str(exc))))
 
 
 class TimeoutWorker:
@@ -51,6 +62,9 @@ class TimeoutWorker:
         self._timeout = timeout
         self._proc: Optional[mp.process.BaseProcess] = None
         self._parent_conn = None
+        # One pipe, one process: concurrent HTTP requests must take turns, or
+        # two callers would read each other's answers off the pipe.
+        self._lock = threading.Lock()
 
     def _ensure_started(self) -> None:
         if self._proc is not None and self._proc.is_alive():
@@ -58,8 +72,21 @@ class TimeoutWorker:
         parent_conn, child_conn = _CTX.Pipe()
         proc = _CTX.Process(target=_loop, args=(self._target, child_conn), daemon=True)
         proc.start()
+        child_conn.close()  # the child owns its end now
         self._proc = proc
         self._parent_conn = parent_conn
+        try:
+            ready = parent_conn.poll(STARTUP_TIMEOUT_S) and parent_conn.recv()
+        except (EOFError, OSError):
+            ready = None
+        if not ready or ready[0] != "ready":
+            self._kill()
+            raise WorkerError("the computation worker could not start", kind="WorkerError")
+
+    def warm_up(self) -> None:
+        """Start the process ahead of the first call (imports can take seconds on Windows)."""
+        with self._lock:
+            self._ensure_started()
 
     def _kill(self) -> None:
         if self._proc is not None:
@@ -71,18 +98,32 @@ class TimeoutWorker:
                     self._proc.join(timeout=2)
             except Exception:  # noqa: BLE001
                 pass
+        if self._parent_conn is not None:
+            try:
+                self._parent_conn.close()
+            except Exception:  # noqa: BLE001
+                pass
         self._proc = None
         self._parent_conn = None
 
     def run(self, op: str, payload: dict, timeout: Optional[float] = None) -> dict[str, Any]:
         timeout = timeout if timeout is not None else self._timeout
+        # wait for a busy worker at most one extra timeout (+ start-up slack)
+        if not self._lock.acquire(timeout=timeout + 30):
+            raise WorkerTimeout("the computation worker is busy with another request; retry in a moment")
+        try:
+            return self._run_locked(op, payload, timeout)
+        finally:
+            self._lock.release()
+
+    def _run_locked(self, op: str, payload: dict, timeout: float) -> dict[str, Any]:
         self._ensure_started()
         assert self._parent_conn is not None
         self._parent_conn.send((op, payload))
         if not self._parent_conn.poll(timeout):
             self._kill()
             raise WorkerTimeout(
-                f"'{op}' did not finish within {timeout:.0f}s and was stopped; "
+                f"'{op}' did not finish within {timeout:g}s and was stopped; "
                 "try a smaller or more specific input"
             )
         try:
@@ -91,10 +132,15 @@ class TimeoutWorker:
             self._kill()
             raise WorkerError(f"worker died unexpectedly: {exc}") from exc
         if status == "error":
-            raise WorkerError(value)
+            kind, message = value if isinstance(value, tuple) else ("WorkerError", str(value))
+            raise WorkerError(message, kind=kind)
         return value
 
     def shutdown(self) -> None:
+        with self._lock:
+            self._shutdown_locked()
+
+    def _shutdown_locked(self) -> None:
         if self._parent_conn is not None:
             try:
                 self._parent_conn.send(None)

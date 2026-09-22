@@ -6,13 +6,13 @@ def test_exact_decimal_addition():
     r = calc.compute("0.1 + 0.2")
     assert r["exact"] == "3/10"
     assert r["is_exact"] is True
-    assert r["decimal"] == 0.3
+    assert r["decimal"] == "0.3"
 
 
 def test_percentage_helpers():
     r = calc.compute("pct(15, 2347)")
     assert r["exact"] == "7041/20"
-    assert r["decimal"] == 352.05
+    assert r["decimal"] == "352.05"
     r2 = calc.compute("pct_change(100, 150)")
     assert r2["exact"] == "50"
 
@@ -59,7 +59,7 @@ def test_ast_whitelist_refuses_unknown_name():
 
 def test_division_by_zero_is_reported_as_error():
     import pytest
-    with pytest.raises(UnsafeExpressionError):
+    with pytest.raises(calc.CalcError):
         calc.compute("1/0")
 
 

@@ -39,3 +39,24 @@ def test_dimensional_check():
 def test_compatible_units_lists_length_units():
     r = units.compatible("meter")
     assert r["count"] > 0
+
+
+def test_pounds_are_mass_not_currency():
+    r = units.convert("5 pounds", "kg")
+    assert r["to_magnitude"] == pytest.approx(2.26796185)
+    with pytest.raises(units.UnitsError, match="currency"):
+        units.convert("10 £", "EUR")
+
+
+def test_float_noise_is_rounded_away():
+    r = units.convert("-40 degC", "degF")
+    assert r["to_magnitude"] == -40.0
+    assert r["formatted"] == "-40 °F"
+    assert units.convert("1 mile", "km")["formatted"] == "1.609344 km"
+
+
+def test_runaway_units_expression_times_out():
+    from laplaces_hoard.engines import sandbox
+
+    with pytest.raises(units.UnitsError, match="did not finish"):
+        sandbox.run("units.convert", {"quantity": "10**10**10 m", "to": "km"}, error_cls=units.UnitsError, timeout=1)

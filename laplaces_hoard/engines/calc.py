@@ -4,61 +4,145 @@ Every literal in the input is converted to an exact SymPy `Rational` /
 `Integer` (never a lossy Python `float`), so `0.1 + 0.2` is exactly
 `3/10`, not `0.30000000000000004`. Expressions never touch `eval` or
 `sympify`; see `safe_ast.py` for the whitelisted parser.
+
+`compute()` is pure; the HTTP layer runs it inside the timeout worker
+(`sandbox.py`) because `9**9**9**9` or `factorial(10**9)` never return.
 """
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import sympy
 
 from .safe_ast import UnsafeExpressionError, parse_expression
 
-__all__ = ["compute", "UnsafeExpressionError"]
+__all__ = ["compute", "UnsafeExpressionError", "CalcError", "format_decimal", "MAX_OUTPUT_CHARS"]
+
+MAX_OUTPUT_CHARS = 2000
+
+
+class CalcError(ValueError):
+    """The expression parsed but has no usable value (division by zero, NaN...)."""
+
+
+def _parse_hint(expression: str) -> str:
+    hints = []
+    if "%" in expression:
+        hints.append("for 'p% of x' write pct(p, x) (e.g. pct(15, 2347)); a bare % is the modulo operator")
+    if re.search(r"\d,\d", expression):
+        hints.append("use '.' as the decimal separator (3.5, not 3,5)")
+    if re.search(r"\d\s*[x×]\s*\d", expression):
+        hints.append("use * for multiplication")
+    hints.append("write it in Python-like syntax, e.g. 2**10 or 2^10, sqrt(2), 1/3 + 1/6")
+    return "; ".join(hints)
+
+
+def format_decimal(value: sympy.Expr, precision: int) -> str:
+    """`N(value, precision)` as text, without the trailing zeros SymPy pads with."""
+    text = str(sympy.N(value, precision))
+    mantissa, sep, exponent = text.partition("e")
+    if "." in mantissa and not any(ch in mantissa for ch in "I*"):
+        mantissa = mantissa.rstrip("0").rstrip(".")
+    return mantissa + (sep + exponent if sep else "")
+
+
+def _cap(text: str) -> tuple[str, bool]:
+    if len(text) <= MAX_OUTPUT_CHARS:
+        return text, False
+    return text[:MAX_OUTPUT_CHARS] + "…", True
 
 
 def compute(expression: str, precision: int = 15) -> dict[str, Any]:
-    precision = max(1, min(int(precision), 1000))
+    try:
+        precision = max(1, min(int(precision), 1000))
+    except (TypeError, ValueError):
+        precision = 15
     raw: dict = {}
-    result, symbols = parse_expression(expression, allow_symbols=False, raw_result=raw)
+    try:
+        result, symbols = parse_expression(expression, allow_symbols=False, raw_result=raw)
+    except UnsafeExpressionError as exc:
+        if "could not parse" in str(exc):
+            raise UnsafeExpressionError(f"{exc}. Hint: {_parse_hint(expression)}") from exc
+        raise
     if symbols:
         # allow_symbols=False guarantees this never happens; kept for safety.
-        raise UnsafeExpressionError("calc does not accept variables; use the math engine")
+        raise UnsafeExpressionError("calc does not accept variables; use the math tool")
 
     if raw:
         return _raw_result(expression, raw, precision)
 
-    try:
-        exact = sympy.nsimplify(result, rational=True) if result.is_number else result
-    except Exception:  # noqa: BLE001 - nsimplify can throw on exotic input
-        exact = result
+    if isinstance(result, list):
+        raise UnsafeExpressionError(
+            "calc evaluates one expression, not a list; for several values use sum(...), mean(...), "
+            "max(...) etc., or make one call per value"
+        )
+
+    if isinstance(result, sympy.logic.boolalg.BooleanAtom):
+        value = bool(result)
+        return {
+            "input": expression, "exact": str(value), "decimal": None, "digits": precision,
+            "is_exact": True, "latex": r"\text{" + str(value) + "}", "value": value,
+        }
+    if isinstance(result, sympy.core.relational.Relational):
+        raise CalcError("this comparison could not be decided exactly; compare the two sides with separate calc calls")
+
+    exact = result
+    if not getattr(exact, "is_number", False):
+        raise CalcError("the expression did not reduce to a number")
+    if exact.has(sympy.zoo, sympy.nan) or exact in (sympy.zoo, sympy.nan):
+        raise CalcError("division by zero or undefined result")
 
     try:
-        decimal_value = sympy.N(exact, precision)
+        decimal_text = format_decimal(exact, precision)
     except Exception as exc:  # noqa: BLE001
-        raise UnsafeExpressionError(f"could not evaluate expression: {exc}") from exc
+        raise CalcError(f"could not evaluate expression: {exc}") from exc
+    if decimal_text in ("nan", "zoo"):
+        raise CalcError("division by zero or undefined result")
 
-    if decimal_value.has(sympy.zoo) or decimal_value == sympy.nan:
-        raise UnsafeExpressionError("division by zero or undefined result")
+    # is_exact: the decimal shown *is* the value (no rounding happened)
+    is_exact = False
+    if exact.is_rational:
+        try:
+            is_exact = sympy.Rational(decimal_text) == exact
+        except (TypeError, ValueError):
+            is_exact = False
 
-    is_exact = bool(exact.is_rational) if exact.is_number else False
-    try:
-        decimal_out: Any = float(decimal_value) if decimal_value.is_real else str(decimal_value)
-    except TypeError:
-        decimal_out = str(decimal_value)
-
-    return {
+    digit_count = None
+    if exact.is_Integer and exact != 0:
+        digit_count = int(sympy.integer_log(abs(int(exact)), 10)[0]) + 1
+    if digit_count is not None and digit_count > MAX_OUTPUT_CHARS:
+        # far too long to be useful (and str() of a >4300-digit int is refused
+        # by Python itself): give the rounded value plus the digit count
+        exact_text, exact_truncated = decimal_text, True
+        latex_text, latex_truncated = "", True
+    else:
+        try:
+            exact_text, exact_truncated = _cap(sympy.sstr(exact))
+            latex_text, latex_truncated = _cap(sympy.latex(exact))
+        except ValueError:  # huge rational parts: same int->str limit
+            exact_text, exact_truncated = decimal_text, True
+            latex_text, latex_truncated = "", True
+    out: dict[str, Any] = {
         "input": expression,
-        "exact": sympy.sstr(exact),
-        "decimal": decimal_out,
+        "exact": exact_text,
+        "decimal": decimal_text,
         "digits": precision,
         "is_exact": is_exact,
-        "latex": sympy.latex(exact),
+        "latex": None if latex_truncated else latex_text,
     }
+    if exact_truncated:
+        out["exact_truncated"] = True
+        if digit_count is not None:
+            out["exact_digit_count"] = digit_count
+    return out
 
 
 def _raw_result(expression: str, raw: dict, precision: int) -> dict[str, Any]:
     kind = raw["kind"]
     args = raw["args"]
+    if len(args) != 1:
+        raise UnsafeExpressionError(f"{kind}() takes exactly one integer argument")
     if kind == "isprime":
         n = _require_int(args[0], "isprime")
         value = bool(sympy.isprime(n))
@@ -77,7 +161,7 @@ def _raw_result(expression: str, raw: dict, precision: int) -> dict[str, Any]:
         return {
             "input": expression,
             "exact": str(value),
-            "decimal": float(value),
+            "decimal": str(value),
             "digits": precision,
             "is_exact": True,
             "latex": sympy.latex(sympy.Integer(value)),
@@ -103,6 +187,6 @@ def _raw_result(expression: str, raw: dict, precision: int) -> dict[str, Any]:
 
 
 def _require_int(value: sympy.Expr, fn: str) -> int:
-    if not value.is_number or not sympy.Integer(value) == value:
+    if not getattr(value, "is_number", False) or not value.is_integer:
         raise UnsafeExpressionError(f"{fn}() needs an integer argument")
     return int(value)

@@ -7,13 +7,14 @@ what the API/MCP layer calls from the parent process.
 """
 from __future__ import annotations
 
-from typing import Any, Optional
+import re
+from typing import Any
 
 import sympy
 from sympy import Symbol
 
 from .safe_ast import UnsafeExpressionError, parse_expression
-from .worker import TimeoutWorker, WorkerError, WorkerTimeout
+from . import sandbox
 
 __all__ = ["run", "SymbolicError", "OPERATIONS"]
 
@@ -41,6 +42,45 @@ def _as_equation(expr: Any) -> tuple[Any, Any]:
     return expr, sympy.Integer(0)
 
 
+MAX_RESULT_CHARS = 1500
+MAX_SOLUTIONS = 20
+
+
+def _var(payload: dict, known: dict[str, Symbol], op: str) -> Symbol:
+    """The variable to act on: the one given, or the only free symbol there is."""
+    name = payload.get("variable")
+    if name:
+        name = str(name).strip()
+        return known.get(name) or Symbol(name)
+    free = [v for k, v in known.items()]
+    if len(free) == 1:
+        return free[0]
+    if not free:
+        raise SymbolicError(f"{op} needs a variable, and the expression has none")
+    names = ", ".join(sorted(known))
+    raise SymbolicError(f"{op} needs 'variable': the expression has several symbols ({names})")
+
+
+def _s(expr) -> str:
+    text = sympy.sstr(expr)
+    return text if len(text) <= MAX_RESULT_CHARS else text[:MAX_RESULT_CHARS] + "…"
+
+
+def _numeric(v) -> Any:
+    """A float when the value is real (tiny imaginary round-off dropped), else a string."""
+    try:
+        n = sympy.N(v)
+        if not n.is_number:
+            return None
+        re_, im_ = n.as_real_imag()
+        re_f, im_f = float(re_), float(im_)
+        if abs(im_f) <= 1e-12 * max(1.0, abs(re_f)):
+            return re_f
+        return f"{re_f:.15g} {'+' if im_f >= 0 else '-'} {abs(im_f):.15g}*I"
+    except (TypeError, ValueError):
+        return None
+
+
 def _residual_ok(lhs, rhs, subs: dict) -> bool:
     try:
         diff = sympy.simplify((lhs - rhs).subs(subs))
@@ -56,21 +96,21 @@ def _op_simplify(payload: dict) -> dict:
     known: dict = {}
     expr = _parse(payload["expression"], known)
     result = sympy.simplify(expr)
-    return {"result": sympy.sstr(result), "latex": sympy.latex(result)}
+    return {"result": _s(result), "latex": sympy.latex(result)}
 
 
 def _op_expand(payload: dict) -> dict:
     known: dict = {}
     expr = _parse(payload["expression"], known)
     result = sympy.expand(expr)
-    return {"result": sympy.sstr(result), "latex": sympy.latex(result)}
+    return {"result": _s(result), "latex": sympy.latex(result)}
 
 
 def _op_factor(payload: dict) -> dict:
     known: dict = {}
     expr = _parse(payload["expression"], known)
     result = sympy.factor(expr)
-    return {"result": sympy.sstr(result), "latex": sympy.latex(result)}
+    return {"result": _s(result), "latex": sympy.latex(result)}
 
 
 def _op_apart(payload: dict) -> dict:
@@ -78,14 +118,14 @@ def _op_apart(payload: dict) -> dict:
     expr = _parse(payload["expression"], known)
     var = known.get(payload.get("variable")) if payload.get("variable") else None
     result = sympy.apart(expr, var) if var is not None else sympy.apart(expr)
-    return {"result": sympy.sstr(result), "latex": sympy.latex(result)}
+    return {"result": _s(result), "latex": sympy.latex(result)}
 
 
 def _op_together(payload: dict) -> dict:
     known: dict = {}
     expr = _parse(payload["expression"], known)
     result = sympy.together(expr)
-    return {"result": sympy.sstr(result), "latex": sympy.latex(result)}
+    return {"result": _s(result), "latex": sympy.latex(result)}
 
 
 def _op_solve(payload: dict) -> dict:
@@ -110,14 +150,14 @@ def _op_solve(payload: dict) -> dict:
         for sol in solutions:
             ok = True
             for v in sol.values():
-                if v.is_number and v.has(sympy.I):
-                    im = sympy.im(sympy.N(v))
-                    if abs(im) > 1e-9:
-                        ok = False
-                        break
+                if v.is_number and v.has(sympy.I) and not isinstance(_numeric(v), float):
+                    ok = False
+                    break
             if ok:
                 filtered.append(sol)
         solutions = filtered
+    more = len(solutions) > MAX_SOLUTIONS
+    solutions = solutions[:MAX_SOLUTIONS]
 
     results = []
     all_verified = True
@@ -128,11 +168,8 @@ def _op_solve(payload: dict) -> dict:
         all_verified = all_verified and verified
         results.append(
             {
-                "values": {str(k): sympy.sstr(v) for k, v in sol.items()},
-                "numeric": {
-                    str(k): (float(sympy.N(v)) if v.is_number and not v.has(sympy.I) else sympy.sstr(sympy.N(v)))
-                    for k, v in sol.items()
-                },
+                "values": {str(k): _s(v) for k, v in sol.items()},
+                "numeric": {str(k): _numeric(v) for k, v in sol.items() if v.is_number},
                 "verified": verified,
             }
         )
@@ -144,6 +181,8 @@ def _op_solve(payload: dict) -> dict:
         "variables": [str(s) for s in syms],
         "verified": all_verified if results else None,
         "count": len(results),
+        "has_more": more,
+        "domain": domain,
         "steps_hint": "Solved with SymPy solve(); each solution is substituted back "
         "into the original equation(s) to compute 'verified'.",
     }
@@ -153,15 +192,14 @@ def _op_nsolve(payload: dict) -> dict:
     known: dict = {}
     expr = _parse(payload["expression"], known)
     lhs, rhs = _as_equation(expr)
-    var_name = payload["variable"]
-    var = known.get(var_name) or Symbol(var_name)
+    var = _var(payload, known, "nsolve")
     x0 = float(payload.get("x0", 0))
     try:
         root = sympy.nsolve(lhs - rhs, var, x0)
     except Exception as exc:  # noqa: BLE001
         raise SymbolicError(f"nsolve did not converge from x0={x0}: {exc}") from exc
     return {
-        "result": sympy.sstr(root),
+        "result": _s(root),
         "numeric": float(root),
         "latex": sympy.latex(root),
         "variable": str(var),
@@ -171,16 +209,16 @@ def _op_nsolve(payload: dict) -> dict:
 def _op_diff(payload: dict) -> dict:
     known: dict = {}
     expr = _parse(payload["expression"], known)
-    var = known.get(payload["variable"]) or Symbol(payload["variable"])
+    var = _var(payload, known, "diff")
     order = int(payload.get("order", 1))
     result = sympy.diff(expr, var, order)
-    return {"result": sympy.sstr(result), "latex": sympy.latex(result)}
+    return {"result": _s(result), "latex": sympy.latex(result)}
 
 
 def _op_integrate(payload: dict) -> dict:
     known: dict = {}
     expr = _parse(payload["expression"], known)
-    var = known.get(payload["variable"]) or Symbol(payload["variable"])
+    var = _var(payload, known, "integrate")
     lower = payload.get("lower")
     upper = payload.get("upper")
     if lower is not None and upper is not None:
@@ -192,15 +230,15 @@ def _op_integrate(payload: dict) -> dict:
             numeric = float(sympy.N(result)) if result.is_number else None
         except Exception:  # noqa: BLE001
             numeric = None
-        return {"result": sympy.sstr(result), "latex": sympy.latex(result), "numeric": numeric, "definite": True}
+        return {"result": _s(result), "latex": sympy.latex(result), "numeric": numeric, "definite": True}
     result = sympy.integrate(expr, var)
-    return {"result": sympy.sstr(result) + " + C", "latex": sympy.latex(result) + " + C", "definite": False}
+    return {"result": _s(result) + " + C", "latex": sympy.latex(result) + " + C", "definite": False}
 
 
 def _op_limit(payload: dict) -> dict:
     known: dict = {}
     expr = _parse(payload["expression"], known)
-    var = known.get(payload["variable"]) or Symbol(payload["variable"])
+    var = _var(payload, known, "limit")
     point = _parse(str(payload["point"]), known)
     direction = payload.get("direction", "+-")
     dir_map = {"+": "+", "-": "-", "+-": "+-"}
@@ -209,24 +247,24 @@ def _op_limit(payload: dict) -> dict:
         result = sympy.limit(expr, var, point)
     else:
         result = sympy.limit(expr, var, point, dir=d)
-    return {"result": sympy.sstr(result), "latex": sympy.latex(result)}
+    return {"result": _s(result), "latex": sympy.latex(result)}
 
 
 def _op_series(payload: dict) -> dict:
     known: dict = {}
     expr = _parse(payload["expression"], known)
-    var = known.get(payload["variable"]) or Symbol(payload["variable"])
+    var = _var(payload, known, "series")
     point = _parse(str(payload.get("point", 0)), known)
     order = int(payload.get("order", 6))
     result = sympy.series(expr, var, point, order).removeO()
     full = sympy.series(expr, var, point, order)
-    return {"result": sympy.sstr(full), "latex": sympy.latex(full), "polynomial": sympy.sstr(result)}
+    return {"result": _s(full), "latex": sympy.latex(full), "polynomial": _s(result)}
 
 
 def _op_summation(payload: dict) -> dict:
     known: dict = {}
     expr = _parse(payload["expression"], known)
-    var = known.get(payload["variable"]) or Symbol(payload["variable"])
+    var = _var(payload, known, "summation")
     lower = _parse(str(payload["lower"]), known)
     upper = _parse(str(payload["upper"]), known)
     result = sympy.summation(expr, (var, lower, upper))
@@ -235,13 +273,13 @@ def _op_summation(payload: dict) -> dict:
         numeric = float(sympy.N(result)) if result.is_number else None
     except Exception:  # noqa: BLE001
         pass
-    return {"result": sympy.sstr(result), "latex": sympy.latex(result), "numeric": numeric}
+    return {"result": _s(result), "latex": sympy.latex(result), "numeric": numeric}
 
 
 def _op_product(payload: dict) -> dict:
     known: dict = {}
     expr = _parse(payload["expression"], known)
-    var = known.get(payload["variable"]) or Symbol(payload["variable"])
+    var = _var(payload, known, "product")
     lower = _parse(str(payload["lower"]), known)
     upper = _parse(str(payload["upper"]), known)
     result = sympy.product(expr, (var, lower, upper))
@@ -250,7 +288,7 @@ def _op_product(payload: dict) -> dict:
         numeric = float(sympy.N(result)) if result.is_number else None
     except Exception:  # noqa: BLE001
         pass
-    return {"result": sympy.sstr(result), "latex": sympy.latex(result), "numeric": numeric}
+    return {"result": _s(result), "latex": sympy.latex(result), "numeric": numeric}
 
 
 def _parse_matrix(rows: list[list[str]], known: dict) -> sympy.Matrix:
@@ -264,31 +302,35 @@ def _op_matrix(payload: dict) -> dict:
     mat = _parse_matrix(payload["matrix"], known)
     if op == "det":
         result = mat.det()
-        return {"result": sympy.sstr(result), "latex": sympy.latex(result)}
+        return {"result": _s(result), "latex": sympy.latex(result)}
     if op == "inv":
         try:
             result = mat.inv()
         except sympy.matrices.exceptions.NonInvertibleMatrixError as exc:
             raise SymbolicError(f"matrix is not invertible: {exc}") from exc
-        return {"result": sympy.sstr(result), "latex": sympy.latex(result)}
+        return {"result": _s(result), "latex": sympy.latex(result)}
     if op == "rank":
         return {"result": str(mat.rank())}
     if op == "rref":
         r, pivots = mat.rref()
-        return {"result": sympy.sstr(r), "latex": sympy.latex(r), "pivots": list(pivots)}
+        return {"result": _s(r), "latex": sympy.latex(r), "pivots": list(pivots)}
     if op == "eigenvals":
         vals = mat.eigenvals()
-        return {"result": {sympy.sstr(k): v for k, v in vals.items()}}
+        return {
+            "result": {sympy.sstr(k): int(v) for k, v in vals.items()},
+            "numeric": {sympy.sstr(k): _numeric(k) for k in vals},
+            "note": "keys are eigenvalues, values their algebraic multiplicity",
+        }
     if op == "transpose":
         result = mat.T
-        return {"result": sympy.sstr(result), "latex": sympy.latex(result)}
+        return {"result": _s(result), "latex": sympy.latex(result)}
     if op == "multiply":
         mat2 = _parse_matrix(payload["matrix2"], known)
         try:
             result = mat * mat2
         except sympy.ShapeError as exc:
             raise SymbolicError(f"incompatible matrix shapes: {exc}") from exc
-        return {"result": sympy.sstr(result), "latex": sympy.latex(result)}
+        return {"result": _s(result), "latex": sympy.latex(result)}
     raise SymbolicError(f"unknown matrix operation: {op}")
 
 
@@ -317,20 +359,17 @@ def _op_dsolve(payload: dict) -> dict:
         sol = sympy.dsolve(eq, y_func)
     except Exception as exc:  # noqa: BLE001
         raise SymbolicError(f"could not solve this ODE: {exc}") from exc
-    return {"result": sympy.sstr(sol), "latex": sympy.latex(sol)}
+    return {"result": _s(sol), "latex": sympy.latex(sol)}
 
 
 def _op_inequality(payload: dict) -> dict:
     known: dict = {}
     expr = _parse(payload["expression"], known)
-    var_name = payload.get("variable")
-    var = known.get(var_name) if var_name else next(iter(known.values()), None)
-    if var is None:
-        raise SymbolicError("inequality needs a variable")
+    var = _var(payload, known, "inequality")
     if not isinstance(expr, sympy.core.relational.Relational):
         raise SymbolicError("expression must contain <, >, <=, >= or ==")
     result = sympy.solve_univariate_inequality(expr, var, relational=False)
-    return {"result": sympy.sstr(result), "latex": sympy.latex(result)}
+    return {"result": _s(result), "latex": sympy.latex(result)}
 
 
 _DISPATCH = {
@@ -368,36 +407,85 @@ def _execute(op: str, payload: dict) -> dict:
         raise SymbolicError(f"{type(exc).__name__}: {exc}") from exc
 
 
-_worker: Optional[TimeoutWorker] = None
+_CELL_OPS = ("simplify", "expand", "factor", "apart", "together", "solve", "diff", "integrate", "limit", "series")
 
 
-def _get_worker() -> TimeoutWorker:
-    global _worker
-    if _worker is None:
-        _worker = TimeoutWorker(_execute, timeout=10.0)
-    return _worker
+def _split_args(text: str) -> list[str]:
+    parts, depth, cur = [], 0, []
+    for ch in text:
+        if ch in "([":
+            depth += 1
+        elif ch in ")]":
+            depth -= 1
+        if ch == "," and depth == 0:
+            parts.append("".join(cur).strip())
+            cur = []
+        else:
+            cur.append(ch)
+    parts.append("".join(cur).strip())
+    return [p for p in parts if p]
+
+
+def parse_cell(text: str) -> tuple[str, dict[str, Any]]:
+    """Notebook shorthand for the math engine, e.g. `factor(x**3 - x)`,
+    `diff(sin(x)*x, x)`, `integrate(x**2, x, 0, 2)`, `x**2 = 4` (solve) or a
+    bare expression (simplify). Returns (operation, payload)."""
+    text = text.strip()
+    m = re.match(r"^([a-z]+)\s*\((.*)\)$", text, flags=re.S)
+    if m and m.group(1) in _CELL_OPS and _wraps_whole(text, m.start(2) - 1) and _split_args(m.group(2)):
+        op, args = m.group(1), _split_args(m.group(2))
+        if op == "solve":
+            payload: dict[str, Any] = {"expressions": [args[0]]}
+            if len(args) > 1:
+                payload["variables"] = args[1:]
+            return op, payload
+        payload = {"expression": args[0]}
+        if op in ("simplify", "expand", "factor", "together"):
+            return op, payload
+        if op == "apart":
+            if len(args) > 1:
+                payload["variable"] = args[1]
+            return op, payload
+        if len(args) > 1:
+            payload["variable"] = args[1]
+        if op == "diff" and len(args) > 2:
+            payload["order"] = int(args[2])
+        if op == "integrate" and len(args) > 3:
+            payload["lower"], payload["upper"] = args[2], args[3]
+        if op == "limit":
+            payload["point"] = args[2] if len(args) > 2 else "0"
+        if op == "series":
+            if len(args) > 2:
+                payload["point"] = args[2]
+            if len(args) > 3:
+                payload["order"] = int(args[3])
+        return op, payload
+    if re.search(r"<|>", text):
+        return "inequality", {"expression": text}
+    if text.replace("==", "=").replace("!=", "").count("=") == 1:
+        return "solve", {"expressions": [text]}
+    return "simplify", {"expression": text}
+
+
+def _wraps_whole(text: str, open_idx: int) -> bool:
+    """True when the '(' at open_idx is closed by the final ')' of text."""
+    depth = 0
+    for i in range(open_idx, len(text)):
+        if text[i] == "(":
+            depth += 1
+        elif text[i] == ")":
+            depth -= 1
+            if depth == 0:
+                return i == len(text) - 1
+    return False
 
 
 def run(operation: str, timeout: float = 10.0, **payload: Any) -> dict[str, Any]:
+    """Run one symbolic operation in the shared timeout worker (see `sandbox.py`)."""
     if operation not in OPERATIONS:
-        raise SymbolicError(f"unknown operation: {operation}; choose one of {OPERATIONS}")
-    worker = _get_worker()
-    try:
-        status, value = _run_in_process(worker, operation, payload, timeout)
-    except WorkerTimeout as exc:
-        raise SymbolicError(str(exc)) from exc
-    except WorkerError as exc:
-        raise SymbolicError(str(exc)) from exc
-    return value
-
-
-def _run_in_process(worker: TimeoutWorker, op: str, payload: dict, timeout: float):
-    value = worker.run(op, payload, timeout=timeout)
-    return "ok", value
+        raise SymbolicError(f"unknown operation: {operation}; choose one of {', '.join(OPERATIONS)}")
+    return sandbox.run(f"math.{operation}", payload, error_cls=SymbolicError, timeout=timeout)
 
 
 def shutdown() -> None:
-    global _worker
-    if _worker is not None:
-        _worker.shutdown()
-        _worker = None
+    sandbox.shutdown()

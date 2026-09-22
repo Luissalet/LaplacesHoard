@@ -98,3 +98,51 @@ def test_register_after_query_through_the_api(client, sample_csv, tmp_path):
 def test_app_writes_a_rotating_log(client, data_dir):
     client.post("/api/agent/calc", json={"expression": "1/0"})
     assert (data_dir / "logs" / "app.log").exists()
+
+
+def test_calc_runs_in_the_worker_with_a_timeout(client):
+    r = client.post("/api/agent/calc", json={"expression": "9**9**9**9"})
+    assert r.status_code == 400
+    assert r.json()["error"] == "calc"
+    assert "did not finish" in r.json()["message"]
+    assert client.post("/api/agent/calc", json={"expression": "2^10"}).json()["exact"] == "1024"
+
+
+def test_math_accepts_numeric_matrices_and_caps_timeout(client):
+    r = client.post("/api/agent/math", json={"operation": "matrix", "matrix_op": "det", "matrix": [[1, 2], [3, 4.5]]})
+    assert r.status_code == 200, r.text
+    assert r.json()["result"] == "-3/2"
+    r = client.post("/api/agent/math", json={"operation": "simplify", "expression": "x", "timeout": 1e9})
+    assert r.status_code == 422
+
+
+def test_math_infers_the_only_variable(client):
+    r = client.post("/api/agent/math", json={"operation": "diff", "expression": "x**3"})
+    assert r.status_code == 200, r.text
+    assert r.json()["result"] == "3*x**2"
+    r = client.post("/api/agent/math", json={"operation": "diff", "expression": "x*y"})
+    assert r.status_code == 400 and "variable" in r.json()["message"]
+
+
+def test_solve_reports_real_roots_as_floats(client):
+    r = client.post("/api/agent/math", json={"operation": "solve", "expression": "x**3 - 3*x + 1 = 0"})
+    body = r.json()
+    assert body["verified"] is True and body["count"] == 3
+    roots = sorted(sol["numeric"]["x"] for sol in body["result"])
+    assert all(isinstance(v, float) for v in roots)
+    assert roots[0] == pytest.approx(-1.879385241571817)
+
+
+def test_notebook_math_cells_understand_operation_shorthand(client):
+    cell = client.post("/api/cells", json={"engine": "math", "input": "factor(x**3 - x)"}).json()
+    assert cell["result"]["result"] == "x*(x - 1)*(x + 1)"
+    cell = client.post("/api/cells", json={"engine": "math", "input": "x**2 = 9"}).json()
+    assert cell["result"]["count"] == 2
+    cell = client.post("/api/cells", json={"engine": "units", "input": "5 ft 11 in to cm"}).json()
+    assert cell["result"]["to_magnitude"] == pytest.approx(180.34)
+
+
+def test_rerun_of_a_units_check_reruns_the_check(client):
+    first = client.post("/api/units/check", json={"expression": "3 m/s * 2 s"}).json()
+    again = client.post(f"/api/log/{first['id']}/rerun").json()
+    assert again["dimensionality"] == "[length]"

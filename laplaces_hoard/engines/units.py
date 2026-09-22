@@ -16,10 +16,23 @@ __all__ = ["convert", "check", "compatible", "UnitsError"]
 _ureg = pint.UnitRegistry(autoconvert_offset_to_baseunit=True)
 _ureg.formatter.default_format = "~P"
 
+# "pound"/"pounds" are deliberately absent: in Pint they are the mass unit (lb).
 _CURRENCY_CODES = {
     "usd", "eur", "gbp", "jpy", "cad", "aud", "chf", "cny", "mxn", "brl",
-    "dollar", "dollars", "euro", "euros", "pound", "pounds", "yen",
+    "dollar", "dollars", "euro", "euros", "yen", "sterling",
 }
+_CURRENCY_SYMBOLS = ("$", "€", "£", "¥")
+
+
+def _sig(x: float, digits: int = 12) -> float:
+    """Round to `digits` significant digits: hides float noise like -40.000000000000064."""
+    if x == 0 or x != x or x in (float("inf"), float("-inf")):
+        return x
+    return float(f"{x:.{digits}g}")
+
+
+def _fmt(x: float) -> str:
+    return f"{x:.12g}"
 
 _COMPOUND_TOKEN = re.compile(r"(-?\d+(?:\.\d+)?)\s*([A-Za-zµ°]+)")
 
@@ -30,7 +43,7 @@ class UnitsError(ValueError):
 
 def _reject_currency(text: str) -> None:
     words = re.findall(r"[A-Za-z]+", text.lower())
-    if any(w in _CURRENCY_CODES for w in words):
+    if any(w in _CURRENCY_CODES for w in words) or any(sym in text for sym in _CURRENCY_SYMBOLS):
         raise UnitsError(
             "currency conversion is not supported: exchange rates change and "
             "need network access, which this local tool does not perform on its own"
@@ -67,14 +80,22 @@ def convert(quantity: str, to: str) -> dict[str, Any]:
         raise UnitsError(
             f"cannot convert {q.units} to {target}: dimensions differ ({exc})"
         ) from exc
+    except Exception as exc:  # noqa: BLE001 - e.g. offset-unit arithmetic
+        raise UnitsError(f"cannot convert {quantity!r} to {to!r}: {exc}") from exc
+    try:
+        from_mag = float(q.magnitude)
+        to_mag = float(result.magnitude)
+    except (TypeError, ValueError) as exc:
+        raise UnitsError("only single numeric quantities can be converted (no arrays)") from exc
     return {
         "input": quantity,
         "to": to,
-        "from_magnitude": float(q.magnitude),
+        "from_magnitude": _sig(from_mag),
         "from_unit": str(q.units),
-        "to_magnitude": float(result.magnitude),
+        "to_magnitude": _sig(to_mag),
         "to_unit": str(result.units),
-        "formatted": f"{result.magnitude:g} {result.units:~P}",
+        "formatted": f"{_fmt(to_mag)} {result.units:~P}",
+        "precision_note": "floating-point conversion, rounded to 12 significant digits",
     }
 
 
@@ -82,13 +103,19 @@ def check(expression: str) -> dict[str, Any]:
     """Check dimensional consistency, e.g. `"3 m/s * 2 s" -> length` OK, wrong units flagged."""
     try:
         q = _ureg.parse_expression(expression)
+    except pint.DimensionalityError as exc:
+        raise UnitsError(f"dimensionally inconsistent: {exc}") from exc
     except Exception as exc:  # noqa: BLE001
         raise UnitsError(f"could not parse expression: {expression!r} ({exc})") from exc
     dim = q.dimensionality if hasattr(q, "dimensionality") else pint.util.UnitsContainer()
+    try:
+        magnitude = float(q.magnitude) if hasattr(q, "magnitude") else float(q)
+    except (TypeError, ValueError) as exc:
+        raise UnitsError(f"could not evaluate {expression!r} to a single quantity") from exc
     return {
         "input": expression,
-        "dimensionality": str(dim),
-        "magnitude": float(q.magnitude) if hasattr(q, "magnitude") else float(q),
+        "dimensionality": str(dim) if str(dim) else "dimensionless",
+        "magnitude": _sig(magnitude),
         "units": str(q.units) if hasattr(q, "units") else "dimensionless",
     }
 
