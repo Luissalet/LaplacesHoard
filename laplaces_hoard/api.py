@@ -31,7 +31,7 @@ from . import db
 from .engines import ask as ask_engine
 from .engines import calc, charts, dates, sandbox, stats, symbolic, units
 from .engines.calc import CalcError
-from .engines.data import Catalog, DataError, SQLGateError
+from .engines.data import Catalog, DataError, SQLGateError, is_numeric_type
 from .engines.safe_ast import UnsafeExpressionError
 from .engines.stats import StatsError
 from .engines.symbolic import SymbolicError
@@ -609,6 +609,9 @@ def create_app(
         _record("data", "export_csv", {"sql": body.sql, "lang": body.lang}, "ui", _run)
         buf = io.StringIO()
         names = [c["name"] for c in holder["columns"]]
+        # DECIMAL values (exact money amounts) arrive as text like "-1150.00";
+        # they are numbers too and need the same decimal comma as a float
+        numeric = {c["name"] for c in holder["columns"] if is_numeric_type(c["type"])}
         es = body.lang == "es"
         writer = csv.writer(buf, delimiter=";" if es else ",", lineterminator="\n")
         writer.writerow(names)
@@ -618,7 +621,7 @@ def create_app(
                 v = row[n]
                 if v is None:
                     out_row.append("")
-                elif es and isinstance(v, float):
+                elif es and (isinstance(v, float) or (n in numeric and isinstance(v, str))):
                     out_row.append(str(v).replace(".", ","))
                 else:
                     out_row.append(v)
@@ -667,6 +670,14 @@ def create_app(
             cell["result"] = result
         except _ENGINE_ERRORS as exc:
             error_result = {"error": _error_code(exc), "message": str(exc)}
+            db.update_cell(state.conn, cell["id"], result=error_result)
+            cell["result"] = error_result
+        except HTTPException as exc:
+            # the engine's own error, already turned into {error, message}
+            # by ui(): store it as is, not as an "unexpected failure"
+            detail = exc.detail if isinstance(exc.detail, dict) else {}
+            error_result = {"error": str(detail.get("error", "error")),
+                            "message": str(detail.get("message", exc.detail))}
             db.update_cell(state.conn, cell["id"], result=error_result)
             cell["result"] = error_result
         except Exception as exc:  # noqa: BLE001 - a cell must never come back as a raw 500

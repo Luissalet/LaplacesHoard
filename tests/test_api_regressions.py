@@ -267,3 +267,15 @@ def test_logged_inputs_skip_defaults_and_still_rerun(client):
     assert logged == {"operation": "business_days", "start": "2026-09-21", "end": "2026-09-25"}
     assert client.post(f"/api/log/{s['id']}/rerun").json()["mean"] == 2.5
     assert client.post(f"/api/log/{d['id']}/rerun").json()["business_days"] == 5
+
+
+def test_spanish_csv_export_also_writes_exact_decimals_with_a_comma(client, tmp_path):
+    # a bank amount read as DECIMAL comes back as text "-1150.00"; the
+    # Spanish export must still write it as a number Excel ES understands
+    path = tmp_path / "banco.csv"
+    path.write_text("Concepto;Importe\nALQUILER;-1.150,00\nCOMPRA;-51,05\n", encoding="utf-8")
+    client.post("/api/ui/data_register", json={"path": str(path)})
+    r = client.post("/api/export/csv", json={"sql": "SELECT * FROM banco ORDER BY Importe", "lang": "es"})
+    assert r.status_code == 200
+    lines = r.content.decode("utf-8-sig").strip().split("\n")
+    assert lines == ["Concepto;Importe", "ALQUILER;-1150,00", "COMPRA;-51,05"]

@@ -32,3 +32,22 @@ def test_a_good_math_cell_with_an_order_still_works(client: TestClient):
     assert resp.status_code == 200
     body = resp.json()
     assert "error" not in (body["result"] or {})
+
+
+@pytest.mark.parametrize("engine,text,code,fragment", [
+    ("calc", "3,5 + 2", "unsafe_expression", "use '.' instead of ','"),
+    ("math", "x^2 - 5x + 6 = 0", "unsafe_expression", "5*x"),
+    ("calc", "1/0", None, None),
+])
+def test_an_ordinary_engine_error_is_shown_as_itself_not_as_an_unexpected_failure(client, engine, text, code, fragment):
+    # the second walk showed every calc/math mistake as "unexpected failure
+    # evaluating this cell: HTTPException: 400: {...}" - the raw wrapper
+    body = client.post("/api/cells", json={"engine": engine, "input": text}).json()
+    result = body["result"]
+    assert result["error"] != "internal_error"
+    assert "unexpected failure" not in result["message"]
+    assert "HTTPException" not in result["message"]
+    if code:
+        assert result["error"] == code
+    if fragment:
+        assert fragment in result["message"]
