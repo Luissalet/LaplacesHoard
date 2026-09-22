@@ -96,10 +96,10 @@ def uc1_bank_es(r: Run, files: Path) -> None:
     r.shot("es-bank-registered")
     r.shot("es-bank-registered-full", full=True)
     run_sql(r, 'SELECT "Categoría", SUM("Importe (€)") AS total\nFROM movimientos_2023_2025\nGROUP BY 1 ORDER BY 2')
-    r.shot("es-bank-sum-varchar-error")
-    run_sql(r, 'SELECT "Categoría", -SUM(CAST(replace(replace("Importe (€)", \'.\', \'\'), \',\', \'.\') AS DECIMAL(12,2))) AS gasto\n'
-               'FROM movimientos_2023_2025\nWHERE year("Fecha operación") = 2025 AND "Categoría" <> \'Nómina\'\nGROUP BY 1 ORDER BY 2 DESC')
-    r.shot("es-bank-sum-fixed")
+    r.shot("es-bank-sum-plain")
+    run_sql(r, 'SELECT "Categoría", -SUM("Importe (€)") AS gasto\nFROM movimientos_2023_2025\n'
+               'WHERE year("Fecha operación") = 2025 AND "Importe (€)" < 0\nGROUP BY 1 ORDER BY 2 DESC')
+    r.shot("es-bank-spending-2025")
     # chart it
     try:
         p.locator("#chart-builder select").nth(2).select_option("gasto")
@@ -126,10 +126,12 @@ def uc1_bank_es(r: Run, files: Path) -> None:
     # Windows-1252 export from another bank
     p.evaluate("document.querySelector('.main').scrollTo(0, 0)")
     register(r, files / "latin1.csv")
-    r.shot("es-cp1252-error")
-    # re-register (refresh after downloading a new month)
-    register(r, files / "movimientos_2023-2025.csv", delimiter=";")
-    r.shot("es-reregister-error")
+    r.shot("es-cp1252")
+    register(r, files / "extracto_cuenta_2025.csv")
+    r.shot("es-second-bank")
+    # re-register (refresh after downloading a new month), pasted with quotes
+    register(r, Path(f'"{files / "movimientos_2023-2025.csv"}"'))
+    r.shot("es-reregister")
 
 
 def uc4_writing_en(r: Run, files: Path) -> None:
