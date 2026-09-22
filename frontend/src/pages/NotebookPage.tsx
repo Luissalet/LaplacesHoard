@@ -171,6 +171,13 @@ function CellResult({ result, t }: { result: Record<string, unknown>; t: T }) {
           {decimal}
         </div>
       )}
+      {typeof result.warning === "string" && (
+        // e.g. "1.000" read as 1.0: the result is right for what was typed,
+        // but maybe not for what was meant - never let that pass silently
+        <div role="note" style={{ marginTop: 8, fontSize: 13, color: "var(--danger)" }}>
+          ⚠ {result.warning}
+        </div>
+      )}
     </div>
   );
 }
