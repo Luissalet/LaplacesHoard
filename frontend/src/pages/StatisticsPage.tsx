@@ -124,11 +124,13 @@ export function StatisticsPage({ t }: { t: T }) {
               <div className="col">
                 <label className="field-label">{t("stats_data1")}</label>
                 <textarea className="mono" value={data1} onChange={(e) => setData1(e.target.value)} rows={2} />
+                <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>{t("stats_data_hint")}</div>
               </div>
               {NEEDS_SECOND_SAMPLE.has(test) && (
                 <div className="col">
                   <label className="field-label">{t("stats_data2")}</label>
                   <textarea className="mono" value={data2} onChange={(e) => setData2(e.target.value)} rows={2} />
+                  <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>{t("stats_data_hint")}</div>
                 </div>
               )}
             </>
@@ -217,10 +219,17 @@ function ColumnSelect({ label, value, onChange, columns, all = false }: {
 }
 
 function parseNums(text: string): number[] {
-  return text
-    .split(/[,;\s]+/)
+  // "3,5; 4,2; 5,1" (Spanish decimal commas, values separated by ';' or a
+  // newline) used to be split on every comma too, turning 4 values into 8
+  // half-values. When the text has a ';' or a line break, split ONLY on
+  // those and read a lone ',' inside each token as a decimal point; a plain
+  // comma-separated list ("12.1, 11.8, 12.6") is unaffected.
+  const hasExplicitSeparator = /[;\n]/.test(text);
+  const parts = hasExplicitSeparator ? text.split(/[;\n]+/) : text.split(/[,\s]+/);
+  return parts
     .map((s) => s.trim())
     .filter(Boolean)
+    .map((s) => (hasExplicitSeparator && /^-?\d+,\d+$/.test(s) ? s.replace(",", ".") : s))
     .map(Number)
     .filter((n) => !Number.isNaN(n));
 }
