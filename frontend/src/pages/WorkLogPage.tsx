@@ -13,13 +13,21 @@ export function WorkLogPage({ t }: { t: (k: DictKey) => string }) {
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<LogItem | null>(null);
 
-  const load = () =>
-    api.log({ limit: 50, engine: engine || undefined, source: source || undefined, query: query || undefined }).then((r) => setItems(r.items));
+  const load = (q = query) =>
+    api.log({ limit: 50, engine: engine || undefined, source: source || undefined, query: q || undefined }).then((r) => setItems(r.items));
 
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [engine, source]);
+
+  // search as you type, not only on Enter - debounced so it does not fire a
+  // request per keystroke
+  useEffect(() => {
+    const timer = window.setTimeout(() => load(query), 300);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query]);
 
   async function rerun(id: string) {
     await api.rerun(id);
