@@ -98,6 +98,7 @@ function AskPanel({ t, datasets }: { t: T; datasets: DatasetSummary[] }) {
   const [scope, setScope] = useState(""); // "" = all registered datasets
   const [result, setResult] = useState<AskResult | null>(null);
   const [sql, setSql] = useState("");
+  const [ranSql, setRanSql] = useState<string | null>(null); // the query the shown result (and chart) came from
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -117,9 +118,11 @@ function AskPanel({ t, datasets }: { t: T; datasets: DatasetSummary[] }) {
       const r = await api.ask(question.trim(), scope ? [scope] : []);
       setResult(r);
       setSql(r.sql);
+      setRanSql(r.sql);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : String(e));
       setResult(null);
+      setRanSql(null);
     } finally {
       setBusy(false);
     }
@@ -132,6 +135,7 @@ function AskPanel({ t, datasets }: { t: T; datasets: DatasetSummary[] }) {
     try {
       const r = await api.query(sql, 200);
       setResult((prev) => (prev ? { ...prev, ...r, sql, question: prev.question, model: prev.model, datasets: prev.datasets, chart_suggestion: prev.chart_suggestion } : null));
+      setRanSql(sql);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : String(e));
     } finally {
@@ -140,7 +144,8 @@ function AskPanel({ t, datasets }: { t: T; datasets: DatasetSummary[] }) {
   }
 
   return (
-    <div className="card">
+    <>
+    <div className="card" id="ask-panel">
       <div className="card-head">
         <h3 className="card-title"><Sparkles size={15} style={{ verticalAlign: -2, marginRight: 6 }} />{t("ask_title")}</h3>
       </div>
@@ -210,6 +215,11 @@ function AskPanel({ t, datasets }: { t: T; datasets: DatasetSummary[] }) {
         </div>
       )}
     </div>
+    {result && (
+      // the suggested chart is drawn straight away; every field stays editable
+      <ChartBuilder id="ask-chart" sql={ranSql} result={result} suggestion={result.chart_suggestion} t={t} />
+    )}
+    </>
   );
 }
 
@@ -488,7 +498,16 @@ function ProfileShape({ p }: { p: ColumnProfile | undefined }) {
 
 const KINDS = ["bar", "line", "area", "scatter", "histogram", "pie", "heatmap"];
 
-function ChartBuilder({ sql, result, t }: { sql: string | null; result: QueryResult | null; t: T }) {
+type ChartSuggestion = AskResult["chart_suggestion"];
+
+function ChartBuilder({ sql, result, t, suggestion = null, id = "chart-builder" }: {
+  sql: string | null;
+  result: QueryResult | null;
+  t: T;
+  /** when given (Ask your data), prefill kind/x/y with it and draw the chart at once */
+  suggestion?: ChartSuggestion;
+  id?: string;
+}) {
   const columns = result?.columns ?? [];
   const names = columns.map((c) => c.name);
   const firstNumeric = columns.find((c) => NUMERIC.test(c.type))?.name ?? "";
@@ -512,6 +531,17 @@ function ChartBuilder({ sql, result, t }: { sql: string | null; result: QueryRes
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [colsKey]);
 
+  // declared after the reset above so it wins when both run for a new result
+  useEffect(() => {
+    if (!sql || !suggestion || !names.includes(suggestion.x) || !names.includes(suggestion.y)) return;
+    setKind(suggestion.kind);
+    setX(suggestion.x);
+    setY(suggestion.y);
+    setColor("");
+    buildWith(suggestion.kind, suggestion.x, suggestion.y, "", title);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sql, suggestion, colsKey]);
+
   useEffect(() => {
     if (spec && chartRef.current) {
       const dark = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim().startsWith("#1");
@@ -526,7 +556,9 @@ function ChartBuilder({ sql, result, t }: { sql: string | null; result: QueryRes
     }
   }, [spec]);
 
-  async function build() {
+  const build = () => buildWith(kind, x, y, color, title);
+
+  async function buildWith(kind: string, x: string, y: string, color: string, title: string) {
     if (!sql) return;
     setBusy(true);
     setError(null);
@@ -542,7 +574,7 @@ function ChartBuilder({ sql, result, t }: { sql: string | null; result: QueryRes
   }
 
   return (
-    <div className="card" id="chart-builder">
+    <div className="card" id={id}>
       <div className="card-head">
         <h3 className="card-title"><BarChart3 size={15} style={{ verticalAlign: -2, marginRight: 6 }} />{t("data_chart_builder")}</h3>
         <span className="faint">{sql ? t("data_chart_hint") : t("data_chart_run_first")}</span>
