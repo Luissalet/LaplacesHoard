@@ -6,7 +6,7 @@
 
 **Un motor local de cálculo exacto, matemática simbólica, unidades, fechas, estadística y SQL sobre archivos para un modelo de lenguaje local: exacto cuando se puede, y con cada cálculo registrado con un id que el modelo cita y una persona puede volver a ejecutar.**
 
-[English](README.md) · [Ejecutar en local](#ejecutar-en-local-en-windows) · [Conectar con Faustus](#conectarlo-a-faustus) · [Referencia MCP](docs/MCP.md) · [Portfolio](https://luissalet.github.io/Portfolio/#projects)
+[English](README.md) · [Inicio rápido](#inicio-rápido) · [Conectar con Faustus](#conectarlo-a-faustus) · [Referencia MCP](docs/MCP.md) · [Portfolio](https://luissalet.github.io/Portfolio/#projects)
 
 ![Vista de datos de Laplace's Hoard: un dataset de ventas perfilado columna a columna, con una consulta SQL agrupada y su resultado](docs/media/data.png)
 *Aplicación real, datos sintéticos de demostración (`--demo`), consultas reales.*
@@ -66,10 +66,60 @@ como por un agente por MCP, están descritos en
   laborables en Madrid hasta una fecha, en el cuaderno o en la pantalla de
   unidades y fechas.
 
-## Modelos compartidos
+## Inicio rápido
 
-Laplace's Hoard incluye Hoard Link, un pequeño resolutor compartido con las
-demás aplicaciones locales de la familia Hoard, para que "Pregunta a tus datos"
+```
+git clone https://github.com/Luissalet/LaplacesHoard.git
+cd LaplacesHoard
+```
+
+### Windows
+
+Haz doble clic en **`Iniciar Laplace's Hoard.cmd`**. La primera vez crea
+`.venv` (preferiblemente con Python 3.13), instala
+`requirements-lock.txt`, compila la interfaz si falta `frontend/dist`, y
+después arranca la aplicación en segundo plano, espera a que responda
+`/api/health` y abre el navegador. **`Detener Laplace's Hoard.cmd`** la
+para. Lo mismo desde PowerShell:
+`scripts\start.ps1 [-Port 8812] [-Demo] [-NoBrowser]` y `scripts\stop.ps1`.
+
+Pasos manuales:
+
+```powershell
+py -3.13 -m venv .venv
+.venv\Scripts\python -m pip install -r requirements-lock.txt
+cd frontend; npm ci; npm run build; cd ..
+.venv\Scripts\python -m laplaces_hoard
+```
+
+### Linux / macOS
+
+Con Python 3.11 o posterior y Node 22:
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements-lock.txt
+(cd frontend && npm ci && npm run build)
+.venv/bin/python -m laplaces_hoard --demo
+```
+
+La aplicación responde en `http://127.0.0.1:8812` (`curl http://127.0.0.1:8812/api/health`).
+Los motores también se pueden usar como biblioteca, sin el servidor; por ejemplo,
+`.venv/bin/python -c "from laplaces_hoard.engines import calc; print(calc.compute('0.1 + 0.2'))"`.
+
+`--demo` usa `data-demo/`, con archivos sintéticos de ventas, sensores y
+personal, en lugar de tu `data/`; `--port` y `--data-dir` (o
+`LAPLACE_DATA_DIR`) cambian los valores por defecto; `--no-browser` evita
+abrir una pestaña.
+
+![Estadística: prueba t de Welch entre dos regiones de las ventas de demostración](docs/media/statistics.png)
+*Prueba t de Welch sobre una columna de un dataset, con el valor p primero y una interpretación neutral.*
+
+## Modelos compartidos (HoardLink)
+
+Laplace's Hoard incluye una copia de [HoardLink](https://github.com/Luissalet/HoardLink)
+(`laplaces_hoard/hoard_link/`), un pequeño resolutor que comparten las
+aplicaciones locales de la familia Hoard, para que "Pregunta a tus datos"
 use el modelo de lenguaje que Faustus o un servidor local compatible con
 la API de OpenAI (Ollama, llama.cpp u otro similar) ya tenga cargado, en
 lugar de cargar una copia propia. Orden de resolución: configuración
@@ -83,11 +133,20 @@ por qué, con un botón de volver a comprobar y configuración manual
 
 ## Conectarlo a Faustus
 
-Laplace's Hoard se declara con `faustus-plugin.json` en la raíz del
-repositorio. Arranca la aplicación y en Faustus abre **Conectores →
-Aplicaciones cercanas → Añadir**. Faustus la encuentra en el puerto 8812,
-comprueba `/api/health`, lanza el adaptador MCP y carga la skill
-`exact-numbers`.
+Laplace's Hoard es un plugin de [Faustus](https://github.com/Luissalet/Faustus)
+y se declara con `faustus-plugin.json` en la raíz del repositorio. Arranca
+la aplicación y en Faustus abre **Conectores → Aplicaciones cercanas →
+Añadir**. Faustus la encuentra en el puerto 8812, comprueba `/api/health`,
+lanza el adaptador MCP y carga la skill `exact-numbers`. El adaptador es
+un script por stdio que se lanza por su ruta, con la URL de la aplicación
+en `LAPLACE_URL`:
+
+```powershell
+$env:LAPLACE_URL = "http://127.0.0.1:8812"
+.venv\Scripts\python.exe laplaces_hoard\mcp_server.py
+```
+
+### Herramientas MCP
 
 | herramienta | solo lectura | qué hace |
 | --- | --- | --- |
@@ -110,34 +169,17 @@ sus límites.
 ![Actividad del asistente: las llamadas que hizo un modelo a través del adaptador MCP, cada una con su id](docs/media/assistant-activity.png)
 *Llamadas reales hechas a través del adaptador MCP (`scripts/demo_agent_session.py`) sobre los datos de demostración.*
 
-## Ejecutar en local en Windows
-
-Haz doble clic en **`Iniciar Laplace's Hoard.cmd`**. La primera vez crea
-`.venv` (preferiblemente con Python 3.13), instala
-`requirements-lock.txt`, compila la interfaz si falta `frontend/dist`, y
-después arranca la aplicación en segundo plano, espera a que responda
-`/api/health` y abre el navegador. **`Detener Laplace's Hoard.cmd`** la
-para. Lo mismo desde PowerShell:
-`scripts\start.ps1 [-Port 8812] [-Demo] [-NoBrowser]` y `scripts\stop.ps1`.
-
-Pasos manuales:
-
-```powershell
-py -3.13 -m venv .venv
-.venv\Scripts\python -m pip install -r requirements-lock.txt
-cd frontend; npm ci; npm run build; cd ..
-.venv\Scripts\python -m laplaces_hoard
-```
-
-`--demo` usa `data-demo/`, con archivos sintéticos de ventas, sensores y
-personal, en lugar de tu `data/`; `--port` y `--data-dir` (o
-`LAPLACE_DATA_DIR`) cambian los valores por defecto; `--no-browser` evita
-abrir una pestaña.
-
-![Estadística: prueba t de Welch entre dos regiones de las ventas de demostración](docs/media/statistics.png)
-*Prueba t de Welch sobre una columna de un dataset, con el valor p primero y una interpretación neutral.*
-
 ## Arquitectura
+
+```mermaid
+flowchart LR
+  UI["Interfaz React"] -->|"/api/ui/*"| API["Aplicación FastAPI en 127.0.0.1:8812"]
+  Model["Faustus o cualquier cliente MCP"] -->|"stdio"| MCP["mcp_server.py"] -->|"/api/agent/*"| API
+  API --> Engines["motores: calc, math, units, dates, stats, data"]
+  Engines --> Worker["proceso de trabajo con límite de tiempo"]
+  Engines --> DuckDB[("catálogo DuckDB, consultas de solo lectura")]
+  API --> Log[("registro y cuaderno en SQLite")]
+```
 
 FastAPI sobre motores en Python puro (sin imports de FastAPI), SQLite para
 el registro y el cuaderno, DuckDB para el catálogo de datos, un único
@@ -148,10 +190,11 @@ es un script aparte que solo habla HTTP con la aplicación.
 conexiones, la validación SQL, el proceso de trabajo y la protección frente
 al navegador.
 
-## Tests
+## Desarrollo
 
 ```powershell
 .venv\Scripts\python -m pytest -q
+cd frontend; npm ci; npm run build
 ```
 
 237 tests, sin red, en torno a un minuto. Cubren la lista blanca del AST
@@ -180,13 +223,13 @@ error, un error claro cuando el modelo no responde en SQL y el estado
 honesto de "no disponible" sin ningún modelo resuelto; la configuración
 guardada se puede borrar, se rechaza la que el formulario nunca envía y un
 `backend.json` estropeado no impide arrancar la aplicación. Los recorridos
-de los casos de uso añadieron regresiones para los CSV españoles
+de los casos de uso añadieron tests de regresión para los CSV españoles
 (separadores, codificaciones, volver a registrar), las filas de título de
 Excel, las columnas BLOB y anidadas, las pistas de coma decimal en
 `calc`/`math`, los mensajes de error del cuaderno y la exportación CSV en
 español.
 
-## Privacidad y límites
+## Privacidad y seguridad
 
 La aplicación solo escucha en `127.0.0.1` y no tiene telemetría. No hace
 peticiones de red: los tipos de cambio y la descarga de festivos quedan
@@ -195,23 +238,29 @@ desactivada. Los datos se quedan en `data/` (ignorado por git) o donde
 indique `--data-dir`; registrar un archivo lo copia al catálogo local y
 nunca modifica el original. Un middleware rechaza el DNS rebinding
 (cabecera `Host` incorrecta) y las escrituras desde otros sitios (`Origin`
-ajeno o `Sec-Fetch-Site: cross-site`) en todas las rutas. Los scripts de
-arranque de Windows se han ejecutado con PowerShell 7 en Linux; la batería
-de tests se ejecuta aquí en Linux y está configurada para Windows en la CI.
+ajeno o `Sec-Fetch-Site: cross-site`) en todas las rutas. Cada llamada a una
+herramienta queda auditada en el registro con su origen (interfaz o
+asistente), entrada, salida, duración y estado, y "Actividad del
+asistente" muestra exactamente lo que ha ejecutado el modelo. Los scripts
+de arranque de Windows se han probado con PowerShell 7 en Linux; la CI
+ejecuta los tests en Ubuntu con Python 3.12 y compila la interfaz con
+Node 22.
 
 ## Hoja de ruta / límites conocidos
 
 - Algunos textos fijos de la interfaz siguen en inglés incluso en la
   versión española (mensajes de los motores, interpretaciones de los
-  tests, nombres de los días, etiquetas de tipo de gráfico); traducirlos
-  es el siguiente paso en la interfaz.
+  tests, nombres de los días, etiquetas de tipo de gráfico); está previsto
+  traducirlos.
 - Un dataset registrado por error no se puede borrar todavía desde la
   interfaz ni la API, solo volver a registrarlo encima.
 - Añadir un archivo significa escribir o pegar su ruta; todavía no hay
   selector de archivos ni arrastrar y soltar.
-- La respuesta de `list_tools` en MCP pesa bastante (unos 19 KB antes de
-  la primera llamada), lo cual va bien con una ventana de contexto de
-  32k pero pesa con 8k; acortar las descripciones está previsto.
+- La respuesta de `list_tools` en MCP pesa bastante (unos 20.000
+  caracteres, alrededor de 5k tokens, antes de la primera llamada), lo
+  cual va bien con una ventana de contexto de 32k pero pesa con 8k. Antes
+  de acortar las descripciones hay que medir si eso empeora la elección
+  de herramientas en modelos pequeños.
 - Las tarjetas de dataset y de perfil pueden desbordar horizontalmente en
   ventanas muy estrechas, y un gráfico muestra una categoría ausente como
   `null` en lugar de ocultarla.

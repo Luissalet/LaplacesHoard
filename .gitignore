@@ -3,11 +3,10 @@ __pycache__/
 *.pyc
 .pytest_cache/
 data/
-data-demo/
+data-*/
 node_modules/
 frontend/dist/
 *.log
 .env
 test-results/
 .DS_Store
-data-uxtest/

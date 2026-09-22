@@ -121,9 +121,8 @@ fixed in `827a24c`, verified against a running instance with Playwright.
   breaking agent parsing to fix a cosmetic issue, so it needs its own
   audit of which strings are model-facing vs. person-facing.
 - **A9** (no dataset removal) needs a new capability (an MCP tool plus a
-  UI action plus a manifest entry), not a fix to existing behaviour, and
-  "never remove or hide an existing capability" for this pass argued for
-  keeping scope to fixes and small additions rather than a new delete
+  UI action plus a manifest entry), not a fix to existing behaviour, so
+  this round kept to fixes and small additions rather than a new delete
   path that needs its own safety review (confirmation, whether linked
   vs. copied files are affected, whether the underlying file is ever
   touched).

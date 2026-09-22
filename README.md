@@ -6,7 +6,7 @@
 
 **A local calculator, symbolic-math, units, dates, statistics and SQL-over-files engine for a local language model: exact where exactness is possible, and every computation logged with an id the model cites and a person can re-run.**
 
-[Español](README.es.md) · [Quick start](#run-locally-on-windows) · [Connect to Faustus](#connect-it-to-faustus) · [MCP reference](docs/MCP.md) · [Portfolio](https://luissalet.github.io/Portfolio/#projects)
+[Español](README.es.md) · [Quick start](#quick-start) · [Connect to Faustus](#connect-it-to-faustus) · [MCP reference](docs/MCP.md) · [Portfolio](https://luissalet.github.io/Portfolio/#projects)
 
 ![Laplace's Hoard data view: a sales dataset profiled column by column, with a grouped SQL query and its result](docs/media/data.png)
 *Actual application, synthetic demo data (`--demo`), real queries.*
@@ -61,10 +61,59 @@ agent over MCP, are written up in [docs/USE_CASES.md](docs/USE_CASES.md)
 - **Everyday numbers.** 21 % VAT, `72 pulgadas -> cm`, working days in
   Madrid until a date, in the notebook or the units and dates screen.
 
-## Shared models
+## Quick start
 
-Laplace's Hoard vendors Hoard Link, a small resolver shared with the
-other Hoard apps, so "Ask your data" uses whichever language model
+```
+git clone https://github.com/Luissalet/LaplacesHoard.git
+cd LaplacesHoard
+```
+
+### Windows
+
+Double-click **`Iniciar Laplace's Hoard.cmd`**. The first run creates
+`.venv` (Python 3.13 preferred), installs `requirements-lock.txt`, builds
+the interface if `frontend/dist` is missing, then starts the app in the
+background, waits for `/api/health` and opens the browser.
+**`Detener Laplace's Hoard.cmd`** stops it. The same from PowerShell:
+`scripts\start.ps1 [-Port 8812] [-Demo] [-NoBrowser]` and `scripts\stop.ps1`.
+
+Manual steps:
+
+```powershell
+py -3.13 -m venv .venv
+.venv\Scripts\python -m pip install -r requirements-lock.txt
+cd frontend; npm ci; npm run build; cd ..
+.venv\Scripts\python -m laplaces_hoard
+```
+
+### Linux / macOS
+
+Python 3.11 or newer and Node 22:
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements-lock.txt
+(cd frontend && npm ci && npm run build)
+.venv/bin/python -m laplaces_hoard --demo
+```
+
+The app answers on `http://127.0.0.1:8812` (`curl http://127.0.0.1:8812/api/health`).
+The engines also work as a library without the server, for example
+`.venv/bin/python -c "from laplaces_hoard.engines import calc; print(calc.compute('0.1 + 0.2'))"`.
+
+`--demo` uses `data-demo/`, seeded with synthetic sales, sensor and HR
+files, instead of your own `data/`; `--port` and `--data-dir` (or
+`LAPLACE_DATA_DIR`) override the defaults; `--no-browser` skips opening a
+tab.
+
+![Statistics: Welch's t-test between two regions of the demo sales data](docs/media/statistics.png)
+*Welch's t-test run on a dataset column, with the p-value first and a neutral interpretation.*
+
+## Shared models (HoardLink)
+
+Laplace's Hoard vendors [HoardLink](https://github.com/Luissalet/HoardLink)
+(`laplaces_hoard/hoard_link/`), a small resolver shared by the Hoard family
+of local apps, so "Ask your data" uses whichever language model
 Faustus or another local OpenAI-compatible server (Ollama, llama.cpp, or
 similar) already has loaded,
 instead of loading a copy of its own. Resolution order: explicit override
@@ -76,10 +125,19 @@ overrides (Faustus URL/token, per-capability URL/model).
 
 ## Connect it to Faustus
 
-Laplace's Hoard declares itself with `faustus-plugin.json` at the repo
-root. Start the app, then in Faustus open **Connectors → Nearby apps →
-Add**. Faustus finds it on port 8812, checks `/api/health`, launches the
-MCP adapter and loads the `exact-numbers` skill.
+Laplace's Hoard is a plugin for [Faustus](https://github.com/Luissalet/Faustus)
+and declares itself with `faustus-plugin.json` at the repo root. Start the
+app, then in Faustus open **Connectors → Nearby apps → Add**. Faustus finds
+it on port 8812, checks `/api/health`, launches the MCP adapter and loads
+the `exact-numbers` skill. The adapter is a stdio script started by path,
+with the app's URL in `LAPLACE_URL`:
+
+```powershell
+$env:LAPLACE_URL = "http://127.0.0.1:8812"
+.venv\Scripts\python.exe laplaces_hoard\mcp_server.py
+```
+
+### MCP tools
 
 | tool | read-only | what |
 | --- | --- | --- |
@@ -101,33 +159,17 @@ the configuration snippet, every argument, output shape and limit.
 ![Assistant activity: the tool calls a model made through the MCP adapter, each with its id](docs/media/assistant-activity.png)
 *Real tool calls made through the MCP adapter (`scripts/demo_agent_session.py`) against the demo data.*
 
-## Run locally on Windows
-
-Double-click **`Iniciar Laplace's Hoard.cmd`**. The first run creates
-`.venv` (Python 3.13 preferred), installs `requirements-lock.txt`, builds
-the interface if `frontend/dist` is missing, then starts the app in the
-background, waits for `/api/health` and opens the browser.
-**`Detener Laplace's Hoard.cmd`** stops it. The same from PowerShell:
-`scripts\start.ps1 [-Port 8812] [-Demo] [-NoBrowser]` and `scripts\stop.ps1`.
-
-Manual steps:
-
-```powershell
-py -3.13 -m venv .venv
-.venv\Scripts\python -m pip install -r requirements-lock.txt
-cd frontend; npm ci; npm run build; cd ..
-.venv\Scripts\python -m laplaces_hoard
-```
-
-`--demo` uses `data-demo/`, seeded with synthetic sales, sensor and HR
-files, instead of your own `data/`; `--port` and `--data-dir` (or
-`LAPLACE_DATA_DIR`) override the defaults; `--no-browser` skips opening a
-tab.
-
-![Statistics: Welch's t-test between two regions of the demo sales data](docs/media/statistics.png)
-*Welch's t-test run on a dataset column, with the p-value first and a neutral interpretation.*
-
 ## Architecture
+
+```mermaid
+flowchart LR
+  UI["React interface"] -->|"/api/ui/*"| API["FastAPI app on 127.0.0.1:8812"]
+  Model["Faustus or any MCP client"] -->|"stdio"| MCP["mcp_server.py"] -->|"/api/agent/*"| API
+  API --> Engines["engines: calc, math, units, dates, stats, data"]
+  Engines --> Worker["worker process with hard timeout"]
+  Engines --> DuckDB[("DuckDB catalogue, read-only queries")]
+  API --> Log[("SQLite work log and notebook")]
+```
 
 FastAPI over pure-Python engines (no FastAPI imports), SQLite for the work
 log and notebook, DuckDB for the dataset catalogue, one spawn-context
@@ -137,10 +179,11 @@ that only speaks HTTP to the app. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 covers the connection model, the SQL gate, the worker and the browser
 guard.
 
-## Tests
+## Development
 
 ```powershell
 .venv\Scripts\python -m pytest -q
+cd frontend; npm ci; npm run build
 ```
 
 237 tests, offline, about a minute. They cover the AST whitelist
@@ -165,12 +208,12 @@ rows), a good SQL answer, one retry that carries the error, a clear error
 when the model does not answer in SQL, and the honest "unavailable" state
 with no model resolved; saved overrides can be cleared, a config the form
 never sends is refused, and a broken `backend.json` does not stop the app.
-The use-case walks added regressions for Spanish CSVs (separators,
+The use-case walks added regression tests for Spanish CSVs (separators,
 encodings, re-registering), Excel title rows, BLOB and nested columns,
 decimal-comma hints in `calc`/`math`, notebook error messages and the
 Spanish CSV export.
 
-## Privacy and limits
+## Privacy and security
 
 The app binds `127.0.0.1` only and has no telemetry. It makes no network
 requests: exchange rates and holiday downloads are out of scope, and
@@ -178,22 +221,26 @@ DuckDB extension auto-install is disabled. Data stays in `data/`
 (gitignored) or wherever `--data-dir` points; registering a file copies it
 into the local catalogue and never modifies the original. A middleware
 rejects DNS rebinding (wrong `Host`) and cross-site writes (foreign
-`Origin` or `Sec-Fetch-Site: cross-site`) on every route. The Windows
-launch scripts were exercised with PowerShell 7 on Linux; the test suite
-runs on Linux here and is configured for Windows in CI.
+`Origin` or `Sec-Fetch-Site: cross-site`) on every route. Every tool call is
+audited in the work log with its source (UI or assistant), input, output,
+duration and status, and "Assistant activity" shows exactly what the
+model ran. The Windows launch scripts were exercised with PowerShell 7 on
+Linux; CI runs the tests on Ubuntu with Python 3.12 and builds the
+interface with Node 22.
 
 ## Roadmap / known limits
 
 - A few fixed UI strings stay in English even in the Spanish interface
   (engine messages, test interpretations, weekday names, chart-kind
-  labels); translating them is the next UI pass.
+  labels); translating them is planned.
 - A dataset registered by mistake cannot be removed from the UI or API
   yet, only re-registered over.
 - Adding a file means typing or pasting its path; there is no file
   picker or drag-and-drop yet.
-- The MCP `list_tools` payload is sizeable (about 19 KB before the first
-  call), which is fine at a 32k context window but heavy at 8k;
-  shortening the descriptions is planned.
+- The MCP `list_tools` payload is sizeable (about 20,000 characters,
+  roughly 5k tokens, before the first call), which is fine at a 32k
+  context window but heavy at 8k. Shortening the descriptions waits on a
+  measurement of whether it hurts tool selection by small models.
 - The dataset and profile cards can overflow horizontally on very narrow
   windows, and a chart shows a missing category as `null` instead of
   hiding it.
