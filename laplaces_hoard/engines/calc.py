@@ -46,7 +46,13 @@ def _thousands_separator_warning(expression: str) -> Optional[str]:
     Never changes the result - calc's numbers are exact and unambiguous
     once parsed - only adds a warning next to a value someone might
     misread."""
-    matches = _THOUSANDS_DOT.findall(expression)
+    # Only numbers that look like thousands, not like a real 3-decimal
+    # value: a group ending in 0 ("1.000", "2.500" - nobody writes 2.500
+    # for two and a half) or two or more digits before the dot ("12.345").
+    # "1.035" (a rate), "3.142", "0.125" are left alone: flagging every
+    # 3-decimal number would bury the one warning that matters.
+    matches = [(a, b) for a, b in _THOUSANDS_DOT.findall(expression)
+               if a[0] != "0" and (b.endswith("0") or len(a) >= 2)]
     if not matches:
         return None
     a, b = matches[0]

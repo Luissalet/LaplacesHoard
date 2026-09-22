@@ -52,3 +52,14 @@ def test_thousands_dot_warning_shows_the_value_actually_used():
     r = calc.compute("1.000 * 3")
     assert r["decimal"] == "3"
     assert "1.000 = 1.0, not 1000" in r["warning"]
+
+
+@pytest.mark.parametrize("expression", ["(1.035^10 - 1) * 100", "3.142 * 2", "0.125 * 8", "2.718^2"])
+def test_ordinary_three_decimal_numbers_do_not_get_the_thousands_warning(expression):
+    # the README's own interest-rate example used to carry a false warning
+    assert "warning" not in calc.compute(expression)
+
+
+@pytest.mark.parametrize("expression", ["2.500 * 4", "12.345 + 1", "100.000 / 12"])
+def test_thousands_looking_numbers_still_get_the_warning(expression):
+    assert "warning" in calc.compute(expression)
