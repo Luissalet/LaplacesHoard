@@ -239,13 +239,16 @@ class Catalog:
         if self._conn is not None and self._conn_mode == mode:
             return self._conn
         self._close_conn()
+        # never download extensions: a query naming e.g. sqlite_scan() would
+        # otherwise make DuckDB fetch one from the internet
+        offline = {"autoinstall_known_extensions": False, "autoload_known_extensions": False}
         if mode == "rw":
-            conn = duckdb.connect(str(self.db_path))
+            conn = duckdb.connect(str(self.db_path), config=offline)
         else:
             conn = duckdb.connect(
                 str(self.db_path),
                 read_only=True,
-                config={"enable_external_access": mode == "ro_files"},
+                config={**offline, "enable_external_access": mode == "ro_files"},
             )
         self._conn, self._conn_mode = conn, mode
         return conn

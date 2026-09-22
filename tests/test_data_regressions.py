@@ -147,3 +147,19 @@ def test_demo_seed_under_apostrophe_path_then_app_can_register(tmp_path):
     assert cat.query("SELECT COUNT(*) AS n FROM sales")["rows"][0]["n"] == 5000
     extra = _write_csv(tmp_path / "extra.csv", 2)
     assert cat.register(str(extra))["row_count"] == 2
+
+
+def test_json_and_ndjson_register_without_extension_downloads(tmp_path):
+    (tmp_path / "rows.json").write_text('[{"a": 1, "b": "x"}, {"a": 2, "b": "y"}]', encoding="utf-8")
+    (tmp_path / "rows.ndjson").write_text('{"a": 1}\n{"a": 2}\n{"a": 3}\n', encoding="utf-8")
+    cat = Catalog(tmp_path / "data")
+    assert cat.register(str(tmp_path / "rows.json"))["row_count"] == 2
+    assert cat.register(str(tmp_path / "rows.ndjson"), name="nd")["row_count"] == 3
+
+
+def test_queries_never_try_to_install_extensions(tmp_path):
+    cat = Catalog(tmp_path / "data")
+    with pytest.raises(DataError, match="not in the catalog"):
+        cat.query("SELECT * FROM sqlite_scan('x.db', 'y')")
+    r = cat.query("SELECT current_setting('autoinstall_known_extensions') AS v")
+    assert r["rows"][0]["v"] is False
