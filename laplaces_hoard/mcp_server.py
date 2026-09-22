@@ -348,6 +348,8 @@ def data_register(path: str, name: Optional[str] = None, options: Optional[dict]
     "13/02/25" are auto-detected already), decimal_separator and
     thousands_separator (e.g. "," and "." for Spanish numbers like
     "-1.150,00" - otherwise such a column stays text and SUM/AVG fail on it).
+    Excel also takes skip_rows (a title row above the real header is
+    detected and skipped automatically; set this to override).
     Returns the schema and profile (like data_describe); a single-row result
     with nested list columns also gets a `hint` suggesting UNNEST.
     Re-registering the same path refreshes it. Not read-only: it copies the

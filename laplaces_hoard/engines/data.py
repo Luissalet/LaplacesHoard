@@ -550,10 +550,12 @@ class Catalog:
             missing = [s for s in sheets if s not in wb.sheetnames]
             if missing:
                 raise DataError(f"sheet(s) not found: {missing}; the workbook has {wb.sheetnames}")
+            explicit_skip = options.get("skip_rows")
             results = []
             for sheet_name in sheets:
                 ws = wb[sheet_name]
-                rows_iter = ws.iter_rows(values_only=True)
+                skip_rows = _resolve_excel_skip_rows(ws, explicit_skip)
+                rows_iter = ws.iter_rows(min_row=skip_rows + 1, values_only=True)
                 try:
                     header = next(rows_iter)
                 except StopIteration:
@@ -574,9 +576,12 @@ class Catalog:
                     )
                 csv_path.unlink(missing_ok=True)
                 select_sql = f"SELECT * FROM read_parquet('{_esc(str(parquet_path))}')"
+                sheet_options = {**options, "sheet": sheet_name}
+                if explicit_skip is None and skip_rows:
+                    sheet_options["skip_rows_detected"] = skip_rows
                 results.append(
                     self._materialize(view_name, select_sql, parquet_path.stat().st_size, p, "excel",
-                                      {**options, "sheet": sheet_name})
+                                      sheet_options)
                 )
         finally:
             wb.close()
@@ -905,6 +910,32 @@ def _sniff_dayfirst_format(p: Path, delimiter: Optional[str], header: bool, enco
     if dayfirst:
         return f"%d{sep}%m{sep}" + ("%Y" if year_len4 else "%y")
     return None
+
+
+def _resolve_excel_skip_rows(ws, explicit: Any) -> int:
+    """How many leading rows to skip before the header row.
+
+    An explicit `options.skip_rows` always wins. Otherwise, detect a lone
+    title row above the real header - one filled cell in row 1 (a title
+    like "Q1 2024 report" in a merged cell) followed by a row with several
+    filled cells (the actual column headers) - which otherwise produces
+    columns named col0, col1... from the title row's single value.
+    """
+    if explicit is not None:
+        try:
+            return max(0, int(explicit))
+        except (TypeError, ValueError):
+            raise DataError(f"skip_rows must be a whole number, got {explicit!r}")
+    try:
+        peek = list(ws.iter_rows(min_row=1, max_row=2, values_only=True))
+    except Exception:  # noqa: BLE001 - never let the heuristic itself break registration
+        return 0
+    if len(peek) < 2:
+        return 0
+    nonempty = lambda row: sum(1 for v in row if v not in (None, ""))  # noqa: E731
+    if nonempty(peek[0]) == 1 and nonempty(peek[1]) >= 2:
+        return 1
+    return 0
 
 
 def _apply_locale_numbers(conn, base_sql: str, decimal_sep: Optional[str], thousands_sep: Optional[str]) -> str:

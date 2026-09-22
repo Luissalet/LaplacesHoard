@@ -4,6 +4,7 @@ import csv
 import json
 from pathlib import Path
 
+import openpyxl
 import pytest
 
 from laplaces_hoard.engines.data import Catalog, DataError
@@ -148,6 +149,50 @@ def test_nested_list_in_a_public_query_result_is_also_capped(tmp_path):
     # needs the real values, not a preview
     full = cat.query_all("SELECT events FROM funes")
     assert len(full["rows"][0]["events"]) == 200
+
+
+def test_excel_title_row_above_the_header_is_detected_and_skipped(tmp_path):
+    # a lone title in row 1 ("Informe trimestral Q1 2024") used to become
+    # the header, producing columns named col0/col1 instead of the real ones
+    xlsx = tmp_path / "informe.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["Informe trimestral Q1 2024"])
+    ws.append(["region", "total"])
+    ws.append(["North", 100])
+    ws.append(["South", 200])
+    wb.save(xlsx)
+    cat = Catalog(tmp_path / "data")
+    meta = cat.register(str(xlsx))
+    ds = meta["datasets"][0]
+    assert ds["columns"] == ["region", "total"]
+    assert ds["row_count"] == 2
+
+
+def test_excel_without_a_title_row_is_unaffected(tmp_path):
+    xlsx = tmp_path / "plain.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["region", "total"])
+    ws.append(["North", 100])
+    wb.save(xlsx)
+    cat = Catalog(tmp_path / "data")
+    meta = cat.register(str(xlsx))
+    assert meta["datasets"][0]["columns"] == ["region", "total"]
+
+
+def test_excel_skip_rows_option_overrides_auto_detection(tmp_path):
+    xlsx = tmp_path / "t.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["note 1"])
+    ws.append(["note 2"])
+    ws.append(["region", "total"])
+    ws.append(["North", 100])
+    wb.save(xlsx)
+    cat = Catalog(tmp_path / "data")
+    meta = cat.register(str(xlsx), options={"skip_rows": 2})
+    assert meta["datasets"][0]["columns"] == ["region", "total"]
 
 
 def test_blob_hex_text_is_capped_like_any_other_long_cell(tmp_path):
