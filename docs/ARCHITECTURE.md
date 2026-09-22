@@ -75,14 +75,15 @@ time, under one lock:
 
 | connection | when | configuration |
 | --- | --- | --- |
-| query connection | normal state, every `query()`/`describe()` | `read_only=True`, `enable_external_access=false` |
+| query connection | normal state, every `query()`/`describe()` | `read_only=True`; `allowed_paths`/`allowed_directories` = the sources of linked datasets and `data/cache/`; then `enable_external_access=false` |
 | read-write | only while a dataset is registered, then closed | file access on |
-| read-only with files | only for a query naming a linked dataset | `read_only=True`, file access on |
 
-All three also disable automatic extension install/load, so nothing in a
-query can make DuckDB download code. The practical effects: a query cannot
-write to the catalogue, cannot read `read_csv('/any/file')`, `glob()` or
-`read_text()`, and registration keeps working after any number of queries.
+Both disable automatic extension install/load, so nothing in a query can
+make DuckDB download code, and DuckDB refuses to widen the allowed paths
+once file access is off. The practical effects: a query cannot write to the
+catalogue, cannot read any other file (`read_csv('/any/file')`, `glob()`,
+`read_text()`, even in the same query as a linked dataset), and
+registration keeps working after any number of queries.
 
 ### The SQL gate
 

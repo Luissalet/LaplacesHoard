@@ -186,3 +186,34 @@ def test_dataset_count_does_not_wait_behind_a_busy_catalog(tmp_path):
     assert _time.monotonic() - start < 1
     release.set()
     th.join()
+
+
+def test_linked_datasets_are_queryable_through_the_file_access_connection(tmp_path, monkeypatch):
+    from laplaces_hoard.engines import data as data_mod
+
+    monkeypatch.setattr(data_mod, "LINK_THRESHOLD_BYTES", 0)  # treat every file as "big"
+    cat = Catalog(tmp_path / "data")
+    meta = cat.register(str(_write_csv(tmp_path / "big.csv", 50)))
+    assert meta["linked"] is True and meta["row_count"] == 50
+    assert cat.query("SELECT SUM(value) AS s FROM big")["rows"][0]["s"] == sum(range(50))
+    # only the linked source is readable: any other file stays blocked, even in
+    # the same query as the linked dataset
+    secret = tmp_path / "secret.csv"
+    secret.write_text("password\nhunter2\n", encoding="utf-8")
+    with pytest.raises(DataError, match="register the file"):
+        cat.query(f"SELECT * FROM big, read_csv('{secret.as_posix()}')")
+    assert cat.describe("big")["sample_rows"]
+
+
+def test_linked_folder_dataset_is_queryable(tmp_path, monkeypatch):
+    from laplaces_hoard.engines import data as data_mod
+
+    monkeypatch.setattr(data_mod, "LINK_THRESHOLD_BYTES", 0)
+    folder = tmp_path / "shards"
+    folder.mkdir()
+    for i in range(3):
+        _write_csv(folder / f"part{i}.csv", 4)
+    cat = Catalog(tmp_path / "data")
+    meta = cat.register(str(folder), options={"glob": "*.csv"})
+    assert meta["linked"] is True
+    assert cat.query("SELECT COUNT(*) AS n FROM shards")["rows"][0]["n"] == 12

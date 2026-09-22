@@ -13,9 +13,11 @@ one connection open at a time, under one lock:
   `enable_external_access=false`, so a query can neither write to the
   catalogue nor read arbitrary files from disk;
 - a short-lived **read-write connection** with file access, opened only
-  while a dataset is being registered and closed straight after;
-- a short-lived read-only connection *with* file access, opened only for a
-  query that references a linked dataset (a view over a file needs it).
+  while a dataset is being registered and closed straight after.
+
+Linked datasets (views over big files) stay queryable because the query
+connection allows exactly their source paths (`allowed_paths` /
+`allowed_directories`) before file access is switched off.
 
 Every `query()` also goes through a statement-type gate (`gate_sql`)
 before it reaches DuckDB at all.
@@ -236,7 +238,7 @@ class Catalog:
     # -- connections ----------------------------------------------------------
 
     def _open(self, mode: str) -> duckdb.DuckDBPyConnection:
-        """Return the single open connection in `mode` ("ro", "ro_files" or "rw")."""
+        """Return the single open connection in `mode` ("ro" or "rw")."""
         if self._conn is not None and self._conn_mode == mode:
             return self._conn
         self._close_conn()
@@ -246,13 +248,34 @@ class Catalog:
         if mode == "rw":
             conn = duckdb.connect(str(self.db_path), config=offline)
         else:
-            conn = duckdb.connect(
-                str(self.db_path),
-                read_only=True,
-                config={**offline, "enable_external_access": mode == "ro_files"},
-            )
+            conn = duckdb.connect(str(self.db_path), read_only=True, config=offline)
+            try:
+                # Linked datasets are views over files, so exactly their sources
+                # (and our own cache) stay readable; then file access is switched
+                # off for good - DuckDB refuses to widen either setting afterwards.
+                files, dirs = self._linked_sources(conn)
+                if files:
+                    conn.execute("SET allowed_paths = ?", [files])
+                conn.execute("SET allowed_directories = ?", [dirs])
+                conn.execute("SET enable_external_access = false")
+            except Exception:
+                conn.close()
+                raise
         self._conn, self._conn_mode = conn, mode
         return conn
+
+    def _linked_sources(self, conn) -> tuple[list[str], list[str]]:
+        files: list[str] = []
+        dirs: list[str] = [str(self.cache_dir) + ("\\" if "\\" in str(self.cache_dir) else "/")]
+        rows = conn.execute(
+            "SELECT kind, source_path, options_json FROM _lh_datasets WHERE linked = TRUE"
+        ).fetchall()
+        for kind, source, _options in rows:
+            if kind == "folder":
+                dirs.append(source + ("\\" if "\\" in source else "/"))
+            elif kind in ("csv", "parquet", "json"):
+                files.append(source)
+        return files, dirs
 
     def _close_conn(self) -> None:
         if self._conn is not None:
@@ -560,7 +583,7 @@ class Catalog:
                         stale = True
             columns = json.loads(meta["columns_json"]) if meta["columns_json"] else []
             profile = json.loads(meta["profile_json"]) if meta["profile_json"] else {}
-            conn = self._open("ro_files" if meta["linked"] else "ro")
+            conn = self._reader()
             sample = conn.execute(f'SELECT * FROM "{name}" LIMIT 5').fetchall()
             col_names = [c["name"] for c in columns]
             sample_rows = [
@@ -602,11 +625,6 @@ class Catalog:
         gate_sql(sql)
         with self._lock:
             conn = self._reader()
-            linked_names = {
-                r[0] for r in conn.execute("SELECT name FROM _lh_datasets WHERE linked = TRUE").fetchall()
-            }
-            if any(re.search(rf"\b{re.escape(n)}\b", sql, flags=re.I) for n in linked_names):
-                conn = self._open("ro_files")
             timer = threading.Timer(timeout_s, conn.interrupt)
             timer.daemon = True
             start = time.monotonic()
@@ -641,8 +659,6 @@ class Catalog:
                 raise DataError(f"SQL error: {_first_lines(str(exc))}") from exc
             finally:
                 timer.cancel()
-                if self._conn_mode != "ro":
-                    self._close_conn()
             elapsed_ms = (time.monotonic() - start) * 1000
 
         truncated = len(rows) > limit

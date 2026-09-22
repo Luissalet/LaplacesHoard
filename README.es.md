@@ -107,7 +107,7 @@ al navegador.
 .venv\Scripts\python -m pytest -q
 ```
 
-154 tests, sin red, unos 35 segundos. Cubren la lista blanca del AST
+156 tests, sin red, unos 35 segundos. Cubren la lista blanca del AST
 (`__import__`, atributos, lambdas, comprensiones), decimales y redondeo
 exactos, precisión de hasta 1000 cifras, entradas desbocadas o que agotan
 la memoria (límite de tiempo, recuperación, rechazo), llamadas simultáneas
