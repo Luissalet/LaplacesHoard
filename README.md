@@ -103,7 +103,7 @@ guard.
 .venv\Scripts\python -m pytest -q
 ```
 
-153 tests, offline, about 35 seconds. They cover the AST whitelist
+154 tests, offline, about 35 seconds. They cover the AST whitelist
 (`__import__`, attributes, lambdas, comprehensions), exact decimals and
 rounding, precision up to 1000 digits, runaway and memory-bomb inputs
 (timeout, recovery, refusal), concurrent calls through the worker, `solve`
