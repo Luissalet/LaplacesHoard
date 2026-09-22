@@ -13,6 +13,7 @@ Reads the app's URL from the `LAPLACE_URL` environment variable (default
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sys
 from typing import Any, Optional, Union
@@ -38,6 +39,10 @@ def _resolve_app_url() -> str:
         )
     return url.rstrip("/")
 
+
+# the adapter's stderr ends up in the host's logs: keep it to warnings, not
+# one "HTTP Request: POST ..." line per tool call
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 APP_URL = _resolve_app_url()
 _client = httpx.Client(base_url=APP_URL, timeout=30.0)

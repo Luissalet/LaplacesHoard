@@ -1,122 +1,140 @@
 # Laplace's Hoard
 
-### ¿Te fiarías de la aritmética de un modelo de lenguaje? Este no tiene por qué.
+### ¿Te fiarías de las cuentas de un modelo de lenguaje? Con este no hace falta.
 
-**Una herramienta local de calculadora exacta, matemática simbólica, unidades,
-estadística y SQL sobre archivos locales para un espacio de trabajo de LLM —
-cada cálculo es exacto cuando la exactitud es posible, y queda registrado con
-un id que el modelo puede citar y una persona puede volver a ejecutar.**
+**Un motor local de cálculo exacto, matemática simbólica, unidades, fechas, estadística y SQL sobre archivos para un modelo de lenguaje local: exacto cuando se puede, y con cada cálculo registrado con un id que el modelo cita y una persona puede volver a ejecutar.**
 
 [English](README.md) · [Ejecutar en local](#ejecutar-en-local-en-windows) · [Conectar una IA](docs/MCP.md) · [Portfolio](https://luissalet.github.io/Portfolio/#projects)
 
-![Cuaderno de Laplace's Hoard, con una conversión de unidades, una factorización simbólica y un cambio porcentual exacto](docs/media/notebook.png)
-*Aplicación real, datos de demostración (`--demo`), cálculos reales.*
+![Vista de datos de Laplace's Hoard: un dataset de ventas perfilado columna a columna, con una consulta SQL agrupada y su resultado](docs/media/data.png)
+*Aplicación real, datos sintéticos de demostración (`--demo`), consultas reales.*
 
 ## Por qué
 
-Los modelos de lenguaje son malos haciendo aritmética, peores haciendo
-estadística, y "resumen" tablas mirando por encima las primeras filas.
-Pregúntale a uno cuánto es el 15% de 2.347, o si un p-valor de 0,03 es
-"significativo", o cuántos días laborables hay entre dos fechas en Madrid,
-y responderá con fluidez y a veces mal. Laplace's Hoard da al modelo motores
-que son *exactos* — `0.1 + 0.2` se calcula como el racional exacto `3/10`,
-no como una aproximación de punto flotante — o explícitamente aproximados
-con una precisión indicada, y **registra cada cálculo** con un id
-(`L-000042`) para que una respuesta pueda citar su fuente y una persona
-pueda abrir el mismo cálculo en la interfaz y repetirlo.
+Los modelos de lenguaje hacen mal las cuentas, peor la estadística, y
+"resumen" una tabla a partir de las primeras filas que ven. Un modelo local
+de 27B te dirá que el 15 % de 2.347 es 351, que un CSV tiene "unas 1.200
+filas" o que p = 0,06 es significativo, con toda naturalidad y sin avisar.
+Laplace's Hoard le da al modelo motores exactos —`0.1 + 0.2` es el racional
+`3/10` y `round(2.5)` es 3— o aproximados con la precisión indicada,
+ejecuta SQL sobre el archivo real en lugar de dejar que el modelo adivine y
+**registra cada cálculo** con un id como `L-000042`. La respuesta cita
+`[L-000042]`; la persona lo abre en la interfaz, ve la entrada y la salida
+exactas y puede repetirlo.
 
 ## Qué está implementado
 
 | Área | Disponible ahora | Límite |
 | --- | --- | --- |
-| Aritmética exacta (`calc`) | +,-,*,/,//,%,**, comparaciones, porcentajes (`pct`, `pct_change`, `ratio`), `sqrt cbrt root exp log ln log10 log2`, trigonometría, `floor ceil round abs min max sum mean median factorial binomial gcd lcm mod isprime nextprime factorint`. Cada literal es un `Rational`/`Integer` exacto, nunca un float con pérdida. Pasa por un parser AST con lista blanca — nunca `eval`/`sympify` sobre texto sin procesar. | Sin variables en `calc` (usa `math`); precisión limitada a 1000 cifras significativas. |
-| Matemática simbólica (`math`) | `simplify expand factor apart together solve nsolve diff integrate limit series summation product matrix (det/inv/rank/rref/eigenvals/transpose/multiply) dsolve inequality`. `solve` verifica cada raíz por sustitución. Cada llamada corre en un proceso worker con un timeout estricto que se autorrecupera si SymPy se cuelga. | `dsolve` solo cubre ecuaciones diferenciales de primer orden escritas como `dy/dx = f(x, y)` con símbolos normales (convención documentada) — la sintaxis de SymPy `y(x)`/`Derivative()` se deja fuera del parser seguro a propósito. |
-| Unidades (`units_convert`) | Conversión con Pint, cantidades compuestas ("5 ft 11 in"), desplazamientos de temperatura correctos, comprobación de consistencia dimensional, listado de unidades compatibles. | Sin conversión de divisas — los tipos de cambio varían y necesitan acceso a red que esta herramienta local no realiza por sí sola. |
-| Fechas (`date_calc`) | Diferencias con calendario, sumar días/semanas/meses/años, días laborables excluyendo fines de semana y festivos (España/Madrid por defecto, cualquier país/comunidad), día de la semana, semana ISO, edad, conversión de zona horaria IANA, parseo de texto libre. | Los calendarios de festivos llegan hasta donde cubre el paquete `holidays`. |
-| Estadística (`stats`) | `describe ttest_1samp ttest_ind (Welch) ttest_rel mannwhitneyu wilcoxon chi2_contingency fisher_exact pearson spearman linregress proportion_ci (Wilson) normal_ci binom_test`, con números directos o una columna de un dataset registrado, con una interpretación neutra de una línea. | La interpretación indica solo significación — nunca tamaño del efecto ni causalidad más allá de lo que reporta SciPy. |
-| Catálogo de datos (`data_*`) | Registra CSV/TSV/Parquet/JSON/NDJSON/Excel (por hoja)/SQLite (por tabla)/una carpeta con patrón como dataset; esquema + perfil por columna (% de nulos, distintos, min/max, media/desviación, top-5 valores); SQL de solo lectura limitado a `SELECT`/`WITH`/`DESCRIBE`/`SUMMARIZE`/`EXPLAIN`/un `PIVOT`; gráficos (barras/líneas/área/dispersión/histograma/tarta/mapa de calor) como PNG vía Vega-Lite. | Los archivos de más de 1 GB se consultan como `VIEW` perezosa ("linked") en vez de materializarse; la garantía de solo lectura se aplica mediante la validación de sentencias más una transacción que siempre se deshace, en vez de una segunda conexión DuckDB de solo lectura a nivel de sistema operativo (esta versión de DuckDB rechaza dos conexiones con configuración distinta al mismo archivo — ver `docs/ARCHITECTURE.md`). |
-| Registro de cálculos | Cada cálculo (interfaz o asistente) recibe un id, aparece listado, es buscable y se puede volver a ejecutar desde la interfaz; las llamadas del propio asistente se muestran aparte en "Actividad del asistente" para auditoría. | Las entradas del registro se limitan a 20.000 caracteres de entrada/salida cada una. |
+| Aritmética exacta (`calc`) | `+ - * / // % **` (y `^`), comparaciones, `pct`, `pct_change`, `ratio`, raíces, logaritmos, trigonometría, `floor ceil round abs min max sum mean median factorial binomial gcd lcm mod isprime nextprime factorint`. Los literales son racionales exactos; el decimal sale con la precisión pedida (de 1 a 1000 cifras) y se indica cuándo está redondeado. Se analiza con una lista blanca del AST, nunca con `eval`/`sympify`. | Sin variables (para eso está `math`). Se rechazan las potencias exactas de más de unos seis millones de cifras; los resultados de más de 2.000 caracteres se recortan indicando el número de cifras. |
+| Matemática simbólica (`math`) | `simplify expand factor apart together solve nsolve diff integrate limit series summation product matrix (det inv rank rref eigenvals transpose multiply) dsolve inequality`. `solve` sustituye cada raíz en la ecuación y devuelve `verified`. Si solo hay una variable, se deduce. | Cada llamada tiene un límite estricto de 10 s en un proceso aparte. `dsolve` cubre ecuaciones de primer orden `dy/dx = f(x, y)` escritas con símbolos simples, no con la notación `y(x)` de SymPy. |
+| Unidades (`units_convert`) | Conversiones con Pint, cantidades compuestas ("5 ft 11 in"), temperaturas con su desplazamiento, comprobación de dimensiones y unidades compatibles. | Coma flotante, redondeada a 12 cifras significativas. Sin divisas (los tipos de cambio requieren red). |
+| Fechas (`date_calc`) | Diferencias con desglose en años, meses y días, sumar días/meses/años, días laborables sin fines de semana ni festivos (por defecto España/Madrid, y cualquier país o región que conozca el paquete `holidays`), día de la semana, semana ISO, edad, zonas horarias, lectura de fechas ISO, numéricas con el día primero y en español ("3 de abril de 2026"), y "hoy". | Los días laborables cuentan los dos extremos salvo con `include_end=false`. Los festivos locales (de ciudad) son solo los que incluye el paquete `holidays`. |
+| Estadística (`stats`) | `describe ttest_1samp ttest_ind (Welch) ttest_rel mannwhitneyu wilcoxon chi2_contingency fisher_exact pearson spearman linregress proportion_ci (Wilson) normal_ci binom_test`, con números pegados o con una columna de un dataset (todas las filas, con `group_by` y `where` opcionales), tamaños del efecto y una frase de interpretación neutral. | La interpretación solo habla de significación. Los resultados indefinidos (por ejemplo, una muestra constante) son errores, no NaN. |
+| Datos (`data_*`) | Registrar CSV/TSV, Parquet, JSON/NDJSON, Excel (un dataset por hoja), SQLite (uno por tabla) o una carpeta de archivos; esquema y perfil por columna (nulos, distintos, mín./máx., media/desviación, histograma, valores más frecuentes); SQL de DuckDB de solo lectura; gráficos (barras, líneas, área, dispersión, histograma, tarta, mapa de calor) en PNG para el modelo e interactivos en la interfaz; exportación a CSV del resultado completo. | Las consultas se ejecutan en una conexión de solo lectura, sin acceso a archivos ni descarga de extensiones, tras una validación que admite una sola sentencia. Lo que recibe el modelo está acotado (1.000 filas, 500 caracteres por celda). Los archivos de más de 1 GB se enlazan como vistas en lugar de copiarse. El registro se hace dentro de la propia petición (todavía no hay cola de tareas en segundo plano). |
+| Registro y auditoría | Cada cálculo, desde la interfaz o desde el asistente, recibe un id, se puede buscar y repetir; "Actividad del asistente" muestra solo las llamadas del modelo. | La entrada y la salida guardadas se limitan a 20.000 caracteres por registro. |
 
 ## Conectarlo a Faustus
 
-Laplace's Hoard se declara a Faustus mediante `faustus-plugin.json` en la
-raíz del repositorio. Arranca la aplicación y en Faustus:
-**Conectores → Aplicaciones cercanas → Añadir**.
-
-También funciona con cualquier cliente MCP (stdio) — ver
-[docs/MCP.md](docs/MCP.md) para la tabla completa de herramientas y un
-fragmento de configuración. Cada resultado lleva un id como `L-000042`,
-pensado para citarse como `[L-000042]`.
+Laplace's Hoard se declara con `faustus-plugin.json` en la raíz del
+repositorio. Arranca la aplicación y en Faustus abre **Conectores →
+Aplicaciones cercanas → Añadir**. Faustus la encuentra en el puerto 8812,
+comprueba `/api/health`, lanza el adaptador MCP y carga la skill
+`exact-numbers`.
 
 | herramienta | solo lectura | qué hace |
 | --- | --- | --- |
-| `calc` | sí | Aritmética exacta y porcentajes |
-| `math` | sí | Matemática simbólica (resolver, cálculo, matrices) |
+| `calc` | sí | Aritmética exacta, porcentajes, teoría de números |
+| `math` | sí | Ecuaciones, derivadas, integrales, límites, series, matrices |
 | `units_convert` | sí | Conversión de unidades |
-| `stats` | sí | Estadística descriptiva y pruebas de hipótesis |
-| `date_calc` | sí | Aritmética de fechas, días laborables, zonas horarias |
-| `data_list` | sí | Listar datasets registrados |
-| `data_register` | no | Registrar un archivo/carpeta como dataset |
+| `stats` | sí | Estadística descriptiva y contrastes de hipótesis |
+| `date_calc` | sí | Diferencias de fechas, días laborables, zonas horarias |
+| `data_list` | sí | Datasets registrados |
+| `data_register` | no | Añadir un archivo o una carpeta como dataset |
 | `data_describe` | sí | Esquema, perfil, filas de muestra |
 | `data_query` | sí | SQL de solo lectura |
 | `data_chart` | sí | Gráfico como imagen |
-| `work_log` | sí | Recuperar un cálculo anterior por id |
+| `work_log` | sí | Recuperar un cálculo anterior por su id |
+
+Funciona con cualquier cliente MCP por stdio; en [docs/MCP.md](docs/MCP.md)
+están la configuración, todos los argumentos, la forma de cada resultado y
+sus límites.
+
+![Actividad del asistente: las llamadas que hizo un modelo a través del adaptador MCP, cada una con su id](docs/media/assistant-activity.png)
+*Llamadas reales hechas a través del adaptador MCP (`scripts/demo_agent_session.py`) sobre los datos de demostración.*
 
 ## Ejecutar en local en Windows
 
-Haz doble clic en **`Iniciar Laplace's Hoard.cmd`** (crea el entorno
-virtual, instala dependencias, construye la interfaz la primera vez, y
-luego arranca la aplicación y abre una pestaña del navegador), o desde
-PowerShell:
+Haz doble clic en **`Iniciar Laplace's Hoard.cmd`**. La primera vez crea
+`.venv` (preferiblemente con Python 3.13), instala
+`requirements-lock.txt`, compila la interfaz si falta `frontend/dist`, y
+después arranca la aplicación en segundo plano, espera a que responda
+`/api/health` y abre el navegador. **`Detener Laplace's Hoard.cmd`** la
+para. Lo mismo desde PowerShell:
+`scripts\start.ps1 [-Port 8812] [-Demo] [-NoBrowser]` y `scripts\stop.ps1`.
+
+Pasos manuales:
 
 ```powershell
-python -m venv .venv
-.venv\Scripts\pip install -r requirements-lock.txt
+py -3.13 -m venv .venv
+.venv\Scripts\python -m pip install -r requirements-lock.txt
 cd frontend; npm ci; npm run build; cd ..
 .venv\Scripts\python -m laplaces_hoard
 ```
 
-Añade `--demo` para ejecutar con datos sintéticos de muestra en vez de los
-tuyos (`data-demo/` en vez de `data/`), o `--port 8813 --data-dir D:\ruta`
-para cambiar los valores por defecto. `--no-browser` evita abrir una
-pestaña automáticamente.
+`--demo` usa `data-demo/`, con archivos sintéticos de ventas, sensores y
+personal, en lugar de tu `data/`; `--port` y `--data-dir` (o
+`LAPLACE_DATA_DIR`) cambian los valores por defecto; `--no-browser` evita
+abrir una pestaña.
+
+![Estadística: prueba t de Welch entre dos regiones de las ventas de demostración](docs/media/statistics.png)
+*Prueba t de Welch sobre una columna de un dataset, con el valor p primero y una interpretación neutral.*
 
 ## Arquitectura
 
-FastAPI + un conjunto de motores en Python puro (sin imports de FastAPI) +
-SQLite para el registro/cuaderno + DuckDB para el catálogo de datos. Ver
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) para el modelo de datos, el
-diseño con proceso worker para la matemática simbólica, las reglas exactas
-de la validación SQL y la protección contra ataques desde el navegador.
+FastAPI sobre motores en Python puro (sin imports de FastAPI), SQLite para
+el registro y el cuaderno, DuckDB para el catálogo de datos, un único
+proceso de trabajo (contexto `spawn`) con límite de tiempo estricto para
+todo lo que evalúa expresiones, y una interfaz en React. El adaptador MCP
+es un script aparte que solo habla HTTP con la aplicación.
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) explica el modelo de
+conexiones, la validación SQL, el proceso de trabajo y la protección frente
+al navegador.
 
 ## Tests
 
-```
-.venv/bin/python -m pytest -q
+```powershell
+.venv\Scripts\python -m pytest -q
 ```
 
-83 tests, todos sin red, ~9 segundos. Cubren: la lista blanca del AST
-(rechaza `__import__`, acceso a atributos, lambdas, comprensiones, nombres
-desconocidos); aritmética decimal exacta (`0.1 + 0.2 == 3/10`); verificación
-de `solve` por sustitución; el timeout y recuperación del worker simbólico;
-los desplazamientos de temperatura de Pint; el t-test de Welch coincidiendo
-con SciPy al bit; días laborables excluyendo un festivo real de Madrid; la
-validación SQL contra cada tipo de sentencia peligrosa
-(`ATTACH`/`COPY`/`INSTALL`/`LOAD`/`PRAGMA`/múltiples sentencias/...); hoja
-de Excel → dataset, tabla de SQLite → dataset, carpeta con patrón →
-dataset; números de perfil comprobados contra una tabla conocida; los bytes
-mágicos del PNG del gráfico; el validador del manifiesto
-`faustus-plugin.json`; y el protocolo MCP completo — el adaptador lanzado
-por stdio real contra una instancia viva de la aplicación, listando
-herramientas y llamando a `calc` y `data_query`.
+153 tests, sin red, unos 35 segundos. Cubren la lista blanca del AST
+(`__import__`, atributos, lambdas, comprensiones), decimales y redondeo
+exactos, precisión de hasta 1000 cifras, entradas desbocadas o que agotan
+la memoria (límite de tiempo, recuperación, rechazo), llamadas simultáneas
+al proceso de trabajo, la verificación de `solve`, los desplazamientos de
+temperatura de Pint, la prueba t de Welch y otros resultados frente a
+SciPy, días laborables con festivos de Madrid, fechas con el día primero y
+en español, la validación SQL frente a toda sentencia que escribe o lee
+archivos, registrar datos después de consultar, nombres de archivo con
+espacios y tildes, hojas de Excel y tablas de SQLite como datasets, un
+directorio de datos dentro de una carpeta con apóstrofo, los números del
+perfil sobre una tabla conocida, los PNG de los gráficos, la ruta de
+reserva de la SPA frente a path traversal, el formato de los errores, la
+separación entre interfaz y asistente en el registro, el validador de
+`faustus-plugin.json` y el propio protocolo MCP: el adaptador lanzado por
+stdio contra la aplicación en marcha, listando herramientas (con palabras
+clave y anotaciones en cada una) y llamando a `calc`, `data_register`,
+`data_query`, `math`, `data_chart` (devuelve la imagen) y `work_log`.
 
 ## Privacidad y límites
 
-Solo escucha en `127.0.0.1`. Sin telemetría, sin acceso a red salvo que una
-función lo necesite explícitamente (actualmente ninguna lo hace — los tipos
-de cambio y la descarga de calendarios de festivos quedan fuera de alcance
-a propósito). Todos los datos se quedan en `data/` (ignorado por git) salvo
-que indiques otra ruta con `--data-dir`. El middleware de protección contra
-ataques desde el navegador rechaza el DNS rebinding (cabecera `Host`
-incorrecta) y las escrituras cross-site (`Origin`/`Sec-Fetch-Site`
-incorrectos en peticiones que no son GET) en todas las rutas.
+La aplicación solo escucha en `127.0.0.1` y no tiene telemetría. No hace
+peticiones de red: los tipos de cambio y la descarga de festivos quedan
+fuera de alcance, y la instalación automática de extensiones de DuckDB está
+desactivada. Los datos se quedan en `data/` (ignorado por git) o donde
+indique `--data-dir`; registrar un archivo lo copia al catálogo local y
+nunca modifica el original. Un middleware rechaza el DNS rebinding
+(cabecera `Host` incorrecta) y las escrituras desde otros sitios (`Origin`
+ajeno o `Sec-Fetch-Site: cross-site`) en todas las rutas. Los scripts de
+arranque de Windows se han ejecutado con PowerShell 7 en Linux; la batería
+de tests se ejecuta aquí en Linux y está configurada para Windows en la CI.

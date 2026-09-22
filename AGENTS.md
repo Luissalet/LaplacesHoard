@@ -23,16 +23,24 @@ Reglas para agentes de código que trabajen en este repositorio.
 - Cualquier expresión de usuario (calc, math) pasa por
   `engines/safe_ast.py`. Nunca añadas una ruta que llame a `eval` o
   `sympify` sobre texto sin pasar antes por el whitelist de nodos AST.
-- Los cálculos simbólicos (`symbolic.py`) corren en el worker con timeout
-  (`worker.py`). Si añades una operación nueva, debe pasar por
-  `_execute()`/`_DISPATCH`, nunca ejecutarse directamente en el proceso
-  principal (SymPy puede colgarse).
+- Todo lo que evalúa texto del usuario (`calc`, `units`, `math`) se
+  ejecuta en el proceso de trabajo con límite de tiempo, a través de
+  `engines/sandbox.py`. Si añades una operación, pásala por
+  `sandbox._execute()`; nunca la ejecutes directamente en el proceso del
+  servidor (SymPy y Pint pueden colgarse o agotar la memoria).
+- El catálogo de DuckDB mantiene una sola conexión abierta: de solo lectura
+  y sin acceso a archivos para consultar, de escritura solo mientras se
+  registra un dataset. No cambies `enable_external_access` en una conexión
+  abierta: DuckDB no permite volver a activarlo.
 
 ## API (`laplaces_hoard/api.py`)
 
-- Toda operación agente-facing vive en `POST /api/agent/<tool>` y debe
-  devolver exactamente lo que el adaptador MCP expone — así el mismo test
-  (`TestClient`) cubre ambos caminos.
+- Toda herramienta vive en `POST /api/agent/<tool>` (adaptador MCP) y,
+  con el mismo código, en `POST /api/ui/<tool>` (interfaz web). La interfaz
+  nunca debe llamar a `/api/agent/*`: esas llamadas se registran como del
+  asistente y aparecen en "Actividad del asistente".
+- Los errores siempre son `{"error": "<código>", "message": "<texto>"}`,
+  con un mensaje que diga qué cambiar.
 - Cada llamada debe quedar registrada en el work log (`db.log_computation`)
   con `source="agent"` o `source="ui"`, éxito o error. No añadas un endpoint
   agente-facing que se salte este registro.

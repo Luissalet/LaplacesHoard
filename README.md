@@ -2,115 +2,132 @@
 
 ### Would you trust a language model's arithmetic? This one doesn't have to.
 
-**A local-first calculator, symbolic-math, units, statistics and SQL-over-files
-tool for a local LLM workspace — every computation is exact where exactness
-is possible, and logged with an id the model can cite and a human can
-re-run.**
+**A local calculator, symbolic-math, units, dates, statistics and SQL-over-files engine for a local language model: exact where exactness is possible, and every computation logged with an id the model cites and a person can re-run.**
 
 [Español](README.es.md) · [Run locally](#run-locally-on-windows) · [Connect an AI](docs/MCP.md) · [Portfolio](https://luissalet.github.io/Portfolio/#projects)
 
-![Laplace's Hoard notebook, with a unit conversion, a symbolic factorization and an exact percentage change](docs/media/notebook.png)
-*Actual application, demo data (`--demo`), real computations.*
+![Laplace's Hoard data view: a sales dataset profiled column by column, with a grouped SQL query and its result](docs/media/data.png)
+*Actual application, synthetic demo data (`--demo`), real queries.*
 
 ## Why
 
 Language models are bad at arithmetic, worse at statistics, and they
-"summarise" tables by eyeballing the first few rows. Ask one what 15% of
-2,347 is, or whether a p-value of 0.03 is "significant", or how many
-business days are between two dates in Madrid, and it will answer
-fluently and sometimes wrong. Laplace's Hoard gives the model engines that
-are *exact* — `0.1 + 0.2` is computed as the exact rational `3/10`, not a
-floating-point approximation — or explicitly approximate with a stated
-precision, and it **logs every computation** with an id (`L-000042`) so an
-answer can cite its work and a human can open the same computation in the
-UI and re-run it.
+"summarise" a table from the first rows they happen to see. A local 27B
+model will say that 15% of 2,347 is 351, that a CSV has "about 1,200
+rows", or that p = 0.06 is significant, fluently and without warning.
+Laplace's Hoard gives the model engines that are exact — `0.1 + 0.2` is
+the rational `3/10`, `round(2.5)` is 3 — or explicitly approximate with
+the precision stated, runs SQL over the real file instead of letting the
+model guess, and **logs every computation** with an id such as
+`L-000042`. The answer cites `[L-000042]`; the human opens it in the UI,
+sees the exact input and output, and can re-run it.
 
 ## What is implemented
 
 | Area | Available now | Boundary |
 | --- | --- | --- |
-| Exact arithmetic (`calc`) | +,-,*,/,//,%,**, comparisons, percentages (`pct`, `pct_change`, `ratio`), `sqrt cbrt root exp log ln log10 log2` trig, `floor ceil round abs min max sum mean median factorial binomial gcd lcm mod isprime nextprime factorint`. Every literal is an exact `Rational`/`Integer`, never a lossy float. Runs through a whitelisted AST parser — never `eval`/`sympify` on raw text. | No variables in `calc` (use `math`); precision capped at 1000 significant digits. |
-| Symbolic math (`math`) | `simplify expand factor apart together solve nsolve diff integrate limit series summation product matrix (det/inv/rank/rref/eigenvals/transpose/multiply) dsolve inequality`. `solve` verifies every root by substitution. Every call runs in a worker process with a hard timeout that self-heals if SymPy hangs. | `dsolve` only covers first-order ODEs written as `dy/dx = f(x, y)` in plain symbols (documented convention below) — SymPy's `y(x)`/`Derivative()` function-application syntax is deliberately not exposed through the safe parser. |
-| Units (`units_convert`) | Pint-backed conversion, compound quantities ("5 ft 11 in"), correct temperature offsets, dimensional-consistency check, compatible-units listing. | No currency conversion — rates change and need network access this local tool does not perform on its own. |
-| Dates (`date_calc`) | Calendar-aware diffs, adding days/weeks/months/years, business days excluding weekends and public holidays (default Spain/Madrid, any country/subdivision), weekday, ISO week, age, IANA time-zone conversion, free-text parsing. | Holiday calendars only as far as the `holidays` package's coverage. |
-| Statistics (`stats`) | `describe ttest_1samp ttest_ind (Welch) ttest_rel mannwhitneyu wilcoxon chi2_contingency fisher_exact pearson spearman linregress proportion_ci (Wilson) normal_ci binom_test`, from inline numbers or a registered dataset column, with a neutral one-line interpretation. | The interpretation states significance only — never effect size or causation language beyond what SciPy reports. |
-| Data catalogue (`data_*`) | Register CSV/TSV/Parquet/JSON/NDJSON/Excel (per sheet)/SQLite (per table)/a folder glob as a dataset; schema + per-column profile (nulls %, distinct, min/max, mean/sd, top-5 values); read-only SQL gated to `SELECT`/`WITH`/`DESCRIBE`/`SUMMARIZE`/`EXPLAIN`/one `PIVOT`; charts (bar/line/area/scatter/histogram/pie/heatmap) as PNG via Vega-Lite. | Files over 1 GB are queried as a lazy `VIEW` ("linked") instead of materialized; the read-only guarantee is enforced by the statement gate plus an always-rolled-back transaction rather than a second OS-level read-only DuckDB handle (this DuckDB version refuses two differently-configured connections to the same file — see `docs/ARCHITECTURE.md`). |
-| Work log | Every computation (UI or assistant) gets an id, is listed, searchable, and re-runnable from the UI; the assistant's own calls are shown separately under "Assistant activity" for audit. | Log entries are capped at 20,000 characters of input/output each. |
+| Exact arithmetic (`calc`) | `+ - * / // % **` (and `^`), comparisons, `pct`, `pct_change`, `ratio`, roots, logs, trig, `floor ceil round abs min max sum mean median factorial binomial gcd lcm mod isprime nextprime factorint`. Literals are exact rationals; the decimal is given to the requested precision (1–1000 digits) and flagged when rounded. Parsed through an AST whitelist, never `eval`/`sympify`. | No variables (use `math`). Exact powers beyond about six million digits are refused; results over 2,000 characters are cut with the digit count. |
+| Symbolic math (`math`) | `simplify expand factor apart together solve nsolve diff integrate limit series summation product matrix (det inv rank rref eigenvals transpose multiply) dsolve inequality`. `solve` substitutes every root back and reports `verified`. The variable is inferred when there is only one. | Each call has a hard 10 s timeout in a worker process. `dsolve` covers first-order `dy/dx = f(x, y)` written in plain symbols, not SymPy's `y(x)` notation. |
+| Units (`units_convert`) | Pint conversions, compound quantities ("5 ft 11 in"), temperature offsets, dimensional checks, compatible units. | Floating point, rounded to 12 significant digits. No currencies (rates need the network). |
+| Dates (`date_calc`) | Differences with calendar breakdown, adding days/months/years, business days excluding weekends and public holidays (default Spain/Madrid, any country/region the `holidays` package knows), weekday, ISO week, age, time zones, parsing of ISO, day-first numeric and Spanish dates ("3 de abril de 2026"), "today". | Business days count both ends unless `include_end=false`. Local (city) holidays are only those the `holidays` package includes. |
+| Statistics (`stats`) | `describe ttest_1samp ttest_ind (Welch) ttest_rel mannwhitneyu wilcoxon chi2_contingency fisher_exact pearson spearman linregress proportion_ci (Wilson) normal_ci binom_test`, on inline numbers or a dataset column (every row, optional `group_by` and `where`), with effect sizes and one neutral sentence of interpretation. | The interpretation states significance only. Undefined results (e.g. a constant sample) are errors, not NaN. |
+| Data (`data_*`) | Register CSV/TSV, Parquet, JSON/NDJSON, Excel (one dataset per sheet), SQLite (one per table) or a folder of files; schema and per-column profile (nulls, distinct, min/max, mean/sd, histogram, top values); read-only DuckDB SQL; charts (bar, line, area, scatter, histogram, pie, heatmap) as PNG for the model and interactive in the UI; full-result CSV export. | Queries run on a read-only connection with file access and extension downloads disabled, behind a one-statement gate. Model-facing results are capped (1,000 rows, 500 characters per cell). Sources over 1 GB are linked as views instead of copied. Registration runs in the request (no background job queue yet). |
+| Work log and audit | Every computation from the UI or the assistant gets an id, is searchable and re-runnable; "Assistant activity" lists only the model's own tool calls. | Stored input/output is capped at 20,000 characters per entry. |
 
 ## Connect it to Faustus
 
-Laplace's Hoard declares itself to Faustus with `faustus-plugin.json` at the
-repo root. Start the app, then in Faustus: **Connectors → Nearby apps →
-Add**.
-
-It also works with any MCP client (stdio) — see [docs/MCP.md](docs/MCP.md)
-for the full tool table and a config snippet. Every tool result carries an
-id like `L-000042`, meant to be cited as `[L-000042]`.
+Laplace's Hoard declares itself with `faustus-plugin.json` at the repo
+root. Start the app, then in Faustus open **Connectors → Nearby apps →
+Add**. Faustus finds it on port 8812, checks `/api/health`, launches the
+MCP adapter and loads the `exact-numbers` skill.
 
 | tool | read-only | what |
 | --- | --- | --- |
-| `calc` | yes | Exact arithmetic and percentages |
-| `math` | yes | Symbolic math (solve, calculus, matrices) |
+| `calc` | yes | Exact arithmetic, percentages, number theory |
+| `math` | yes | Solve, differentiate, integrate, limits, series, matrices |
 | `units_convert` | yes | Unit conversion |
-| `stats` | yes | Descriptive stats and hypothesis tests |
-| `date_calc` | yes | Date arithmetic, business days, time zones |
-| `data_list` | yes | List registered datasets |
-| `data_register` | no | Register a file/folder as a dataset |
+| `stats` | yes | Descriptive statistics and hypothesis tests |
+| `date_calc` | yes | Date differences, business days, time zones |
+| `data_list` | yes | Registered datasets |
+| `data_register` | no | Add a file or folder as a dataset |
 | `data_describe` | yes | Schema, profile, sample rows |
 | `data_query` | yes | Read-only SQL |
 | `data_chart` | yes | Chart as an image |
-| `work_log` | yes | Recall a past computation by id |
+| `work_log` | yes | Recall an earlier computation by id |
+
+It works with any MCP client over stdio; [docs/MCP.md](docs/MCP.md) has
+the configuration snippet, every argument, output shape and limit.
+
+![Assistant activity: the tool calls a model made through the MCP adapter, each with its id](docs/media/assistant-activity.png)
+*Real tool calls made through the MCP adapter (`scripts/demo_agent_session.py`) against the demo data.*
 
 ## Run locally on Windows
 
-Double-click **`Iniciar Laplace's Hoard.cmd`** (creates the venv, installs
-dependencies, builds the frontend on first run, then starts the app and
-opens a browser tab), or from PowerShell:
+Double-click **`Iniciar Laplace's Hoard.cmd`**. The first run creates
+`.venv` (Python 3.13 preferred), installs `requirements-lock.txt`, builds
+the interface if `frontend/dist` is missing, then starts the app in the
+background, waits for `/api/health` and opens the browser.
+**`Detener Laplace's Hoard.cmd`** stops it. The same from PowerShell:
+`scripts\start.ps1 [-Port 8812] [-Demo] [-NoBrowser]` and `scripts\stop.ps1`.
+
+Manual steps:
 
 ```powershell
-python -m venv .venv
-.venv\Scripts\pip install -r requirements-lock.txt
+py -3.13 -m venv .venv
+.venv\Scripts\python -m pip install -r requirements-lock.txt
 cd frontend; npm ci; npm run build; cd ..
 .venv\Scripts\python -m laplaces_hoard
 ```
 
-Add `--demo` to run against synthetic seeded data instead of your own
-(`data-demo/` instead of `data/`), or `--port 8813 --data-dir D:\path` to
-override defaults. `--no-browser` skips auto-opening a tab.
+`--demo` uses `data-demo/`, seeded with synthetic sales, sensor and HR
+files, instead of your own `data/`; `--port` and `--data-dir` (or
+`LAPLACE_DATA_DIR`) override the defaults; `--no-browser` skips opening a
+tab.
+
+![Statistics: Welch's t-test between two regions of the demo sales data](docs/media/statistics.png)
+*Welch's t-test run on a dataset column, with the p-value first and a neutral interpretation.*
 
 ## Architecture
 
-FastAPI + a set of pure-Python engines (no FastAPI imports) + SQLite for
-the work log/notebook + DuckDB for the dataset catalogue. See
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the data model, the
-worker-process design for symbolic math, the SQL gate's exact rules, and
-the browser-attack guard.
+FastAPI over pure-Python engines (no FastAPI imports), SQLite for the work
+log and notebook, DuckDB for the dataset catalogue, one spawn-context
+worker process with a hard timeout for everything that evaluates
+expressions, and a React interface. The MCP adapter is a separate script
+that only speaks HTTP to the app. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+covers the connection model, the SQL gate, the worker and the browser
+guard.
 
 ## Tests
 
-```
-.venv/bin/python -m pytest -q
+```powershell
+.venv\Scripts\python -m pytest -q
 ```
 
-83 tests, all offline, ~9 seconds. They cover: the AST whitelist (rejects
-`__import__`, attribute access, lambdas, comprehensions, unknown names);
-exact-decimal arithmetic (`0.1 + 0.2 == 3/10`); `solve` verification by
-substitution; the symbolic worker's timeout-and-recovery; Pint temperature
-offsets; Welch's t-test matching SciPy bit-for-bit; business days excluding
-a real Madrid holiday; the SQL gate against every dangerous statement type
-(`ATTACH`/`COPY`/`INSTALL`/`LOAD`/`PRAGMA`/multi-statement/...); Excel
-sheet → dataset, SQLite table → dataset, folder-glob → dataset; profile
-numbers checked against a known table; chart PNG magic bytes; the
-`faustus-plugin.json` manifest checker; and the full MCP protocol — the
-adapter spawned over real stdio against a live instance of the app,
-listing tools and calling `calc` and `data_query`.
+153 tests, offline, about 35 seconds. They cover the AST whitelist
+(`__import__`, attributes, lambdas, comprehensions), exact decimals and
+rounding, precision up to 1000 digits, runaway and memory-bomb inputs
+(timeout, recovery, refusal), concurrent calls through the worker, `solve`
+verification, Pint temperature offsets, Welch's t-test and other results
+against SciPy, business days across Madrid holidays, day-first and Spanish
+dates, the SQL gate against every write and file-reading statement,
+registration after queries, file names with spaces and accents, Excel
+sheets and SQLite tables as datasets, a data directory under a folder with
+an apostrophe, profile numbers on a known table, chart PNGs, the SPA
+fallback against path traversal, the error envelope, the UI/assistant
+split of the audit log, the `faustus-plugin.json` checker, and the MCP
+protocol itself: the adapter spawned over stdio against a live app,
+listing tools (keywords and annotations on each) and calling `calc`,
+`data_register`, `data_query`, `math`, `data_chart` (image returned) and
+`work_log`.
 
 ## Privacy and limits
 
-Binds `127.0.0.1` only. No telemetry, no network access except when a
-feature explicitly needs it (there is currently none that does — currency
-rates and holiday-calendar downloads are both deliberately out of scope).
-All data stays in `data/` (gitignored) unless you point `--data-dir`
-elsewhere. The browser-attack guard middleware rejects DNS-rebinding
-(wrong `Host` header) and cross-site writes (wrong `Origin`/
-`Sec-Fetch-Site` on non-GET requests) on every route.
+The app binds `127.0.0.1` only and has no telemetry. It makes no network
+requests: exchange rates and holiday downloads are out of scope, and
+DuckDB extension auto-install is disabled. Data stays in `data/`
+(gitignored) or wherever `--data-dir` points; registering a file copies it
+into the local catalogue and never modifies the original. A middleware
+rejects DNS rebinding (wrong `Host`) and cross-site writes (foreign
+`Origin` or `Sec-Fetch-Site: cross-site`) on every route. The Windows
+launch scripts were exercised with PowerShell 7 on Linux; the test suite
+runs on Linux here and is configured for Windows in CI.

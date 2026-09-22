@@ -4,123 +4,169 @@
 
 ```
 frontend/ (React 19 + Vite, TypeScript)
-        │  fetch, same-origin
+        │  fetch, same-origin, POST /api/ui/<tool> and UI endpoints
         ▼
 laplaces_hoard/api.py   FastAPI app: browser-attack guard middleware,
-        │                /api/agent/<tool> (agent-facing), /api/... (UI)
+        │                /api/agent/<tool> (MCP adapter) and /api/ui/<tool> (web UI),
+        │                work log, notebook cells, CSV export, static SPA
         ▼
 laplaces_hoard/engines/*   pure Python, no FastAPI imports
-  calc.py        AST-whitelist → SymPy, exact rationals
-  safe_ast.py    the whitelist itself (shared by calc and symbolic)
-  symbolic.py    solve/diff/integrate/matrices/... via a worker process
+  safe_ast.py    the AST whitelist → SymPy converter (shared by calc and math)
+  calc.py        exact numeric evaluation
+  symbolic.py    solve/diff/integrate/matrices/...; notebook shorthand parser
+  units.py       Pint-backed conversion and dimensional checks
+  sandbox.py     runs calc, units and math in the timeout worker
   worker.py      generic timeout-guarded subprocess (spawn context)
-  units.py       Pint-backed conversion
-  dates.py       dateutil + holidays
-  data.py        DuckDB catalogue + SQL gate
+  dates.py       dateutil + holidays + zoneinfo
+  data.py        DuckDB catalogue, profiles and the SQL gate
   charts.py      Vega-Lite spec + vl-convert PNG render
-  stats.py       NumPy/SciPy tests, resolves data from `data.py` too
+  stats.py       NumPy/SciPy tests, reads dataset columns through data.py
 
-laplaces_hoard/db.py       SQLite (stdlib, WAL): work log, notebook cells, settings
-laplaces_hoard/mcp_server.py   standalone MCP stdio adapter (imports httpx+mcp only)
+laplaces_hoard/db.py          SQLite (stdlib, WAL): work log, notebook cells, settings
+laplaces_hoard/mcp_server.py  standalone MCP stdio adapter (imports httpx + mcp only)
 ```
 
 Every engine function takes plain Python values and returns a JSON-safe
-`dict`. `api.py`'s `_record()` helper wraps every call: it times it, invokes
-the engine, and writes one row to the `computations` table (id `L-000042`,
-`source` = `ui` or `agent`) whether it succeeds or fails, then returns the
-engine's dict with `id`/`cite` added. The MCP adapter never touches an
-engine directly — every tool is an HTTP POST to `/api/agent/<tool>`, so the
-exact same code path is what `tests/test_api.py` exercises with FastAPI's
-`TestClient` and what `tests/test_mcp_protocol.py` exercises over real
-stdio.
+`dict`. `api.py`'s `_record()` wraps every call: it times it, invokes the
+engine, writes one row to the `computations` table (id `L-000042`,
+`source` = `agent` or `ui`) whether it succeeds or fails, and returns the
+engine's dict with `id`/`cite` added. Engine errors become
+`{"error": "<code>", "message": "<text>"}` with status 400; an unexpected
+exception becomes the same envelope with status 500 and is logged to
+`data/logs/app.log`.
+
+The tool handlers are mounted twice with identical code: under
+`/api/agent/<tool>` for the MCP adapter (logged as `agent`) and under
+`/api/ui/<tool>` for the web interface (logged as `ui`). That is what keeps
+"Assistant activity" limited to what the model actually did. The adapter
+never touches an engine directly — every tool is an HTTP POST — so
+`tests/test_api*.py` (FastAPI `TestClient`) and `tests/test_mcp_protocol.py`
+(real stdio) exercise the same path.
 
 ## Data model (SQLite, `data/app.sqlite`)
 
-- `computations`: the work log. `id` (`L-` + 6-digit sequence), `engine`,
-  `operation`, `input_json`, `output_json`, `ok`, `error`, `elapsed_ms`,
-  `source` (`ui`/`agent`), `chart_path`, `created_at`.
+- `computations`: the work log and the assistant audit trail. `id`
+  (`L-` + 6-digit sequence), `engine`, `operation`, `input_json` (only the
+  arguments that differ from their defaults), `output_json` (capped at
+  20,000 characters; an oversized output is stored as a valid
+  `{"truncated": true, "preview": ...}` document), `ok`, `error`,
+  `elapsed_ms`, `source` (`ui`/`agent`), `chart_path`, `created_at`.
+  Chart PNGs and full chart specs are never stored in the row.
 - `cells`: notebook cells (`engine`, `input`, `result_json`, `position`).
-- `settings`: free-form key/value (reserved for future use).
+- `settings`: free-form key/value (reserved).
 
 ## Data model (DuckDB, `data/catalog.duckdb`)
 
-- `_lh_datasets`: metadata table (name, source path, kind, `linked`,
-  row count, columns, profile, mtime/size for staleness checks).
-- One `TABLE` (materialized) or `VIEW` (`linked`, for files over the 1 GB
-  threshold) per registered dataset/sheet/table.
+- `_lh_datasets`: metadata (name, source path, kind, `linked`, row count,
+  columns, profile, mtime/size for staleness, registration options).
+- One `TABLE` (materialized) or `VIEW` (`linked`, for sources over 1 GB)
+  per registered dataset, sheet or table. Excel sheets and SQLite tables
+  are converted once to Parquet in `data/cache/` first.
+- Dataset names are SQL-safe slugs of the file/sheet/table name
+  ("Ventas año 2024.csv" → `Ventas_ano_2024`); lookups are
+  case-insensitive.
+
+### Connection model
+
+DuckDB will not hold two differently configured connections to one file
+in the same process, and `enable_external_access` cannot be switched back
+on once it is off. So `Catalog` keeps exactly one connection open at a
+time, under one lock:
+
+| connection | when | configuration |
+| --- | --- | --- |
+| query connection | normal state, every `query()`/`describe()` | `read_only=True`, `enable_external_access=false` |
+| read-write | only while a dataset is registered, then closed | file access on |
+| read-only with files | only for a query naming a linked dataset | `read_only=True`, file access on |
+
+All three also disable automatic extension install/load, so nothing in a
+query can make DuckDB download code. The practical effects: a query cannot
+write to the catalogue, cannot read `read_csv('/any/file')`, `glob()` or
+`read_text()`, and registration keeps working after any number of queries.
 
 ### The SQL gate
 
-`data.gate_sql()` runs before any query touches the catalogue. DuckDB's own
-`extract_statements()` classifies the statement; a bare "one statement,
-type SELECT/EXPLAIN" check is not enough because this DuckDB version
-classifies `DESCRIBE`, `SUMMARIZE` and `PRAGMA` all as type `SELECT`
-internally — so the gate also rejects a fixed list of leading keywords
+`data.gate_sql()` runs before any query reaches DuckDB. DuckDB's
+`extract_statements()` classifies the statement, and because this DuckDB
+version classifies `DESCRIBE`, `SUMMARIZE` and `PRAGMA` all as `SELECT`
+internally, the gate also rejects a fixed list of leading keywords
 (`PRAGMA`, `ATTACH`, `COPY`, `INSTALL`, `LOAD`, `SET`, `CREATE`, `INSERT`,
-`UPDATE`, `DELETE`, `EXPORT`, `CALL`, `DROP`, `ALTER`, ...) regardless of
-how DuckDB classified it. `PIVOT`/`UNPIVOT` get one documented exception:
-DuckDB's parser expands a single `PIVOT` into an internal `CREATE`+`SELECT`
-pair, so exactly that two-statement shape is allowed when the query starts
-with `PIVOT`/`UNPIVOT`; anything else with more than one statement is
-rejected. See `tests/test_data.py::test_sql_gate_refuses_dangerous_statements`
-for the exhaustive list this is tested against.
+`UPDATE`, `DELETE`, `EXPORT`, `CALL`, `DROP`, `ALTER`, `DETACH`, ...)
+after skipping leading comments. `PIVOT`/`UNPIVOT` have one documented
+exception: DuckDB expands a single `PIVOT` into an internal
+`CREATE`+`SELECT` pair, so exactly that shape is allowed when the query
+starts with `PIVOT`/`UNPIVOT`. The gate is the first line; the read-only,
+no-file-access connection is the second.
 
-**Deviation from a literal second read-only connection.** The pinned
-DuckDB version refuses to open a second, `read_only=True` connection to a
-database file that already has a read-write connection open in the same
-process (needed here for dataset registration) — it raises
-`Connection Error: Can't open a connection to same database file with a
-different configuration`. So `query()` runs on the same connection inside a
-transaction that is **always rolled back** (success or failure), after the
-statement-type/keyword gate already rejected anything but a read statement.
-Read-only-ness is therefore enforced at the application level (gate +
-always-rollback) rather than by a second OS-level file handle. Practical
-effect: identical to a read-only connection for every query that passes the
-gate; the only theoretical gap would be a bug in the gate itself, which the
-rollback still catches before anything reaches disk.
+Results: `rows` capped at `limit` (max 1000), text cells cut at 500
+characters, `row_count` = rows returned, `total_rows` = size of the whole
+result (counted up to 1,000,000). `stats` and `data_chart` use an internal
+`query_all()` through the same gate, so a statistic over a 5,000-row
+column uses all 5,000 rows. `/api/export/csv` streams the complete result
+(up to 1,000,000 rows) for the UI's "Export CSV".
 
-## The symbolic-math worker
+## The computation worker
 
-SymPy can hang on some inputs (`solve`, `integrate`, `nsolve` in particular).
-`worker.TimeoutWorker` starts one `multiprocessing` process (the `spawn`
-context — Windows has no `fork`, so the same code path runs on both
-platforms) and talks to it over a `Pipe`. Each call sends `(op, payload)`
-and waits up to `timeout` seconds (default 10s) with `Connection.poll()`. If
-it times out, the process is `terminate()`d (then `kill()`ed if it does not
-die within 2s) and the next call starts a fresh process — the worker
-self-heals rather than wedging the app. `tests/test_symbolic.py` proves both
-halves: a synthetic always-slow target times out predictably, and a normal
-call right after still succeeds.
+`calc`, `units` and `math` turn untrusted text into big-number arithmetic,
+and some inputs never finish (`nextprime(10**3000)`, a pathological
+`solve`). `worker.TimeoutWorker` keeps one `multiprocessing` process (the
+`spawn` context — Windows has no `fork`, so the same code path runs on both
+platforms) and talks to it over a `Pipe`:
+
+- a lock serialises callers (concurrent HTTP requests share one pipe);
+- the child sends a "ready" message after its imports, so start-up time
+  never eats into the first call's timeout; the app warms it up at start;
+- each call waits up to its timeout (default 10 s, capped at 60 s); on
+  timeout the process is terminated (then killed) and the next call starts
+  a fresh one — the worker self-heals instead of wedging the app;
+- engine exceptions travel back by class name, so a syntax error is still
+  reported as `unsafe_expression`, a division by zero as `calc`.
+
+A timeout does not protect against allocation, so two guards run before
+any work: exact integer/rational powers whose result would exceed about
+six million digits are refused (`2**(10**10)` would allocate 1.25 GB in a
+second), and unit expressions only accept plain numeric exponents up to
+100.
+
+On Windows, when the app has no console window (started detached by a
+launcher), the worker is started with the base `pythonw.exe` so no console
+window appears; with a console (the normal `start.ps1` path) the default
+`python.exe` is used.
 
 ## Browser-attack guard
 
 `security.BrowserGuardMiddleware` runs on every request:
 
-- **Host header check** (all methods): rejects anything but
-  `127.0.0.1:<port>` / `localhost:<port>`, which blocks DNS rebinding from a
-  malicious page that resolves an attacker domain to `127.0.0.1`.
-- **Origin / `Sec-Fetch-Site` check** (non-GET/HEAD/OPTIONS only): rejects a
-  request whose `Origin` header names a different origin, or whose
-  `Sec-Fetch-Site` is `cross-site`. Plain `GET` navigation from any tab
-  keeps working — this is intentionally not CORS (no
-  `Access-Control-Allow-Origin` header exists anywhere in the app); it is a
-  same-origin-only write guard.
+- **Host header** (all methods): only `127.0.0.1:<port>` or
+  `localhost:<port>`, which blocks DNS rebinding.
+- **Origin / `Sec-Fetch-Site`** (non-GET/HEAD/OPTIONS): a request whose
+  `Origin` names another origin, or whose `Sec-Fetch-Site` is
+  `cross-site`, is rejected. Plain GET navigation keeps working; there is
+  no CORS header anywhere.
+
+The SPA fallback only serves files that resolve inside `frontend/dist`
+(`/..%2f`, `//etc/passwd` and Windows `..\` all fall back to
+`index.html`), and unknown `/api/` paths return a JSON 404.
 
 ## Threads and processes
 
-- The FastAPI/uvicorn process is single-process, async; the DuckDB
-  connection and the SQLite connection are each guarded by a lock (SQLite:
-  a module-level lock in `db.py`; DuckDB: an `RLock` on the `Catalog`) since
-  multiple requests can arrive concurrently.
-- Every `math` operation spawns/reuses exactly one worker subprocess (see
-  above); nothing else in the app uses multiprocessing.
-- Chart rendering (`vl_convert.vegalite_to_png`) runs synchronously in the
-  request thread — it is a native (Rust) call, not a subprocess, and is fast
-  enough (≤5,000 rows) not to need offloading.
+- One uvicorn process. Sync handlers run in its thread pool; the SQLite
+  connection is guarded by a module-level lock in `db.py`, the DuckDB
+  catalogue by an `RLock`, the worker by its own lock.
+- One computation worker process (see above).
+- Chart rendering (`vl_convert.vegalite_to_png`) runs in the request
+  thread; it is native code and fast for ≤5,000 rows. A PNG over 200 KB is
+  re-rendered at scale 1 so the image a model receives stays small.
+
+## Logging
+
+`data/logs/app.log`, rotating (1 MB × 3): one line per failed call and
+every unexpected exception with its traceback. File contents and query
+results are never written there. `start.ps1` sends the process's own
+stdout/stderr to `data/logs/server.log` / `server.err.log`.
 
 ## Why DuckDB over pandas
 
-The spec's data engine (profiles, SQL, chart data) is naturally expressed as
-SQL over columnar files; DuckDB reads CSV/Parquet/JSON directly, needs no
-pandas/pyarrow dependency, and ships wheels for both target platforms
-(Linux dev, Windows production).
+Profiles, SQL and chart data are naturally SQL over columnar files; DuckDB
+reads CSV/Parquet/JSON directly, needs no pandas/pyarrow dependency, and
+ships wheels for both target platforms (Linux dev, Windows production).
