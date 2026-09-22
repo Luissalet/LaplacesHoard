@@ -53,7 +53,10 @@ def test_worker_timeout_then_recovers():
 
 
 def _always_slow(op, payload):
-    time.sleep(2)
+    # far longer than the bound below, so "returned in time" can only mean
+    # the timeout fired - while leaving room for the worker process to
+    # spawn (twice: start, then restart after the kill) on a busy machine
+    time.sleep(30)
     return {}
 
 
@@ -68,7 +71,7 @@ def test_symbolic_run_timeout_reports_as_error_not_a_hang(monkeypatch):
     start = time.time()
     with pytest.raises(symbolic.SymbolicError):
         symbolic.run("simplify", expression="x", timeout=0.3)
-    assert time.time() - start < 2
+    assert time.time() - start < 10
     fake_worker.shutdown()
 
 
