@@ -14,6 +14,7 @@ engine (adds free symbols and `==`/`<`/`>` as Eq/relational).
 from __future__ import annotations
 
 import ast
+import re
 import inspect
 from typing import Callable, Optional
 
@@ -263,6 +264,24 @@ def normalize_single_equals(text: str) -> str:
     return "".join(out)
 
 
+def _syntax_hint(text: str) -> str:
+    """What people (and models) most often type that is not Python syntax."""
+    hints = []
+    if re.search(r"\d[A-Za-z_(]", text):
+        hints.append("write '*' explicitly for multiplication (5*x, 2*sqrt(3)), not '5x'")
+    if re.search(r"\d,\d", text):
+        hints.append("use '.' as the decimal separator (3.5, not 3,5)")
+    return f" - {'; '.join(hints)}" if hints else ""
+
+
+def decimal_comma_hint(text: str) -> str:
+    """A suffix for errors that a decimal comma ("1.234,56", "3,5") can cause."""
+    if re.search(r"\d,\d", text):
+        return (" - if a comma was meant as a decimal point, use '.' instead and drop any thousands "
+                "separator (1234.56, not 1.234,56)")
+    return ""
+
+
 def parse_expression(
     text: str,
     *,
@@ -287,7 +306,7 @@ def parse_expression(
     try:
         tree = ast.parse(text, mode="eval")
     except SyntaxError as exc:
-        raise UnsafeExpressionError(f"could not parse expression: {exc.msg}") from exc
+        raise UnsafeExpressionError(f"could not parse expression: {exc.msg}{_syntax_hint(text)}") from exc
 
     symbols: dict[str, Symbol] = dict(known_symbols or {})
 
@@ -378,7 +397,7 @@ def parse_expression(
                 except (TypeError, ValueError):
                     params = ""
                 raise UnsafeExpressionError(
-                    f"wrong number of arguments for {name}{params}: got {len(args)}"
+                    f"wrong number of arguments for {name}{params}: got {len(args)}{decimal_comma_hint(text)}"
                 ) from exc
             except (ValueError, AttributeError) as exc:
                 raise UnsafeExpressionError(f"wrong arguments for {name}(): {exc}") from exc

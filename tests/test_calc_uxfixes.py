@@ -36,3 +36,19 @@ def test_wrong_argument_count_never_leaks_the_internal_helper_name():
 def test_implicit_multiplication_gets_a_hint():
     with pytest.raises(UnsafeExpressionError, match=r"write '\*' explicitly"):
         calc.compute("5x")
+
+
+def test_a_spanish_decimal_inside_a_function_call_says_how_to_write_it():
+    # "¿y el 21 % de 1.234,56?" passed through as typed: the comma splits the
+    # number into two arguments; the error must say what to write instead
+    with pytest.raises(UnsafeExpressionError) as exc_info:
+        calc.compute("pct(21, 1.234,56)")
+    message = str(exc_info.value)
+    assert "pct(p, x)" in message
+    assert "1234.56" in message
+
+
+def test_thousands_dot_warning_shows_the_value_actually_used():
+    r = calc.compute("1.000 * 3")
+    assert r["decimal"] == "3"
+    assert "1.000 = 1.0, not 1000" in r["warning"]

@@ -4,6 +4,9 @@ that bypassed every error handler and came back as an unhandled 500,
 leaving the cell with no result at all (and no error shown)."""
 import pytest
 
+from laplaces_hoard.engines.safe_ast import UnsafeExpressionError
+
+from laplaces_hoard.engines import symbolic
 from laplaces_hoard.engines.symbolic import SymbolicError, parse_cell
 
 
@@ -21,3 +24,12 @@ def test_diff_with_a_numeric_order_still_works():
     op, payload = parse_cell("diff(x**2, x, 2)")
     assert op == "diff"
     assert payload["order"] == 2
+
+
+def test_math_tool_implicit_multiplication_gets_the_same_hint_as_calc():
+    # the math tool (not only calc) used to answer "invalid decimal literal"
+    try:
+        with pytest.raises(UnsafeExpressionError, match=r"5\*x"):
+            symbolic.run("solve", expressions=["x^2 - 5x + 6 = 0"])
+    finally:
+        symbolic.shutdown()

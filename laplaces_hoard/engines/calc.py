@@ -30,12 +30,8 @@ def _parse_hint(expression: str) -> str:
     hints = []
     if "%" in expression:
         hints.append("for 'p% of x' write pct(p, x) (e.g. pct(15, 2347)); a bare % is the modulo operator")
-    if re.search(r"\d,\d", expression):
-        hints.append("use '.' as the decimal separator (3.5, not 3,5)")
     if re.search(r"\d\s*[x×]\s*\d", expression):
         hints.append("use * for multiplication")
-    if re.search(r"\d[A-Za-z(]", expression):
-        hints.append("write '*' explicitly for multiplication (5*x, 2*sqrt(3)), not '5x'")
     hints.append("write it in Python-like syntax, e.g. 2**10 or 2^10, sqrt(2), 1/3 + 1/6")
     return "; ".join(hints)
 
@@ -56,7 +52,7 @@ def _thousands_separator_warning(expression: str) -> Optional[str]:
     a, b = matches[0]
     examples = ", ".join(f"{x}.{y}" for x, y in matches[:3])
     return (
-        f"'{examples}' was read as a decimal number ({a}.{b} = {a}.{b}, not {a}{b}); "
+        f"'{examples}' was read with '.' as the decimal point ({a}.{b} = {int(a)}.{b.rstrip('0') or '0'}, not {a}{b}); "
         f"write {a}{b} instead of {a}.{b} if you meant it as a thousands separator"
     )
 
