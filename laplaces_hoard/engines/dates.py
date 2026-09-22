@@ -2,8 +2,8 @@
 
 Business-day counting excludes weekends and public holidays via the
 `holidays` package (default country Spain, subdivision Madrid, both
-overridable per call) — a sensible default for a Spanish user, made configurable
-because the app is meant to travel.
+overridable per call) — a sensible default for a Spanish user, made
+configurable because the app is meant to travel.
 """
 from __future__ import annotations
 

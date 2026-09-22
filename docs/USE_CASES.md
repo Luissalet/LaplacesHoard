@@ -29,7 +29,7 @@ the fix pass (last walked 2026-09-23) is in its "Re-walk" section.
 
 ## UC1 — Where does my money go? (person, Spanish UI)
 
-- **Goal:** see what he spent per category in 2025 from his bank's
+- **Goal:** see what they spent per category in 2025 from their bank's
   download, as a table and a chart, and keep the result as a CSV.
 - **Starting state:** fresh install, no datasets. The bank's "Descargar
   movimientos" file `movimientos_2023-2025.csv`: UTF-8 with BOM, `;`
@@ -126,7 +126,7 @@ the fix pass (last walked 2026-09-23) is in its "Re-walk" section.
 
 - **Goal:** quick answers without opening a spreadsheet: 21 % IVA on
   1.234,56 €, a costume measurement from an English sewing pattern
-  (`72 pulgadas`, `3,5 km` of a location walk in miles), and the number
+  (`72 pulgadas`, `3,5 km` of a walk, in miles), and the number
   of working days in Madrid until 30/10/2026.
 - **Starting state:** any.
 - **Steps:** **Cuaderno** `calc`; **Unidades y fechas** → Unidades
@@ -156,7 +156,7 @@ the fix pass (last walked 2026-09-23) is in its "Re-walk" section.
 ## UC8 — Context length vs speed (agent)
 
 - **Goal:** tokens per second lost per 1k tokens of context for the
-  27B model, from his own llama.cpp benchmark log.
+  27B model, from their own llama.cpp benchmark log.
 - **Starting state:** `llama_bench.ndjson`, 1,200 runs of three models;
   about 1% of runs crashed and have `tokens_per_s: null`.
 - **Prompts:** "Faustus, con `llama_bench.ndjson`: ¿cuántos tokens/s

@@ -88,5 +88,5 @@ access disabled. See [ARCHITECTURE.md](ARCHITECTURE.md#connection-model).
 
 Every tool's docstring ends with a `Keywords:` line in English and Spanish
 (e.g. `calcular, cuánto es, porcentaje, IVA` for `calc`), because Faustus
-picks tools by retrieval over the descriptions and people often write to it
-in Spanish. `tests/test_mcp_protocol.py` checks that every tool has one.
+picks tools by retrieval over the descriptions and people often write to
+it in Spanish. `tests/test_mcp_protocol.py` checks that every tool has one.
