@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { BarChart3, Database, Download, Play, Plus, Sparkles, Table2 } from "lucide-react";
 import { api, ApiError, type AskResult, type ColumnProfile, type DatasetDetail, type DatasetSummary, type QueryResult } from "../api";
 import { detectLang, type DictKey } from "../i18n";
-import { CiteBadge, ErrorBlock, copyCite, fmtNum } from "../components/ResultView";
+import { CiteBadge, ErrorBlock, copyCite, fmtDecimalText, fmtNum } from "../components/ResultView";
 
 type T = (k: DictKey) => string;
 
@@ -205,7 +205,7 @@ function AskPanel({ t, datasets }: { t: T; datasets: DatasetSummary[] }) {
                 {result.rows.map((row, i) => (
                   <tr key={i}>
                     {result.columns.map((c) => (
-                      <td key={c.name} className={NUMERIC.test(c.type) ? "num" : ""}>{fmt(row[c.name])}</td>
+                      <td key={c.name} className={NUMERIC.test(c.type) ? "num" : ""}>{fmt(row[c.name], c.type)}</td>
                     ))}
                   </tr>
                 ))}
@@ -286,7 +286,7 @@ function DatasetPanel({ detail, t }: { detail: DatasetDetail; t: T }) {
   const textCol = detail.columns.find((c) => !NUMERIC.test(c.type) && !/DATE|TIME/i.test(c.type));
   const initialSql =
     textCol && numericCol
-      ? `SELECT ${textCol.name}, COUNT(*) AS n, ROUND(SUM(${numericCol.name}), 2) AS total_${numericCol.name}\nFROM ${detail.name}\nGROUP BY ${textCol.name}\nORDER BY total_${numericCol.name} DESC`
+      ? `SELECT ${sqlIdent(textCol.name)}, COUNT(*) AS n, ROUND(SUM(${sqlIdent(numericCol.name)}), 2) AS total\nFROM ${detail.name}\nGROUP BY 1\nORDER BY total DESC`
       : `SELECT * FROM ${detail.name} LIMIT 20`;
   const [sql, setSql] = useState(initialSql);
   const [result, setResult] = useState<QueryResult | null>(null);
@@ -363,7 +363,7 @@ function DatasetPanel({ detail, t }: { detail: DatasetDetail; t: T }) {
                     <td className="num">{p ? `${fmtNum(p.nulls_pct)}%` : "–"}</td>
                     <td className="num">{p ? fmtNum(p.distinct_approx) : "–"}</td>
                     <td className="mono" style={{ fontSize: 12 }}>
-                      {p && p.min !== undefined ? `${fmt(p.min)} – ${fmt(p.max)}` : "–"}
+                      {p && p.min !== undefined ? `${fmt(p.min, c.type)} – ${fmt(p.max, c.type)}` : "–"}
                     </td>
                     <td className="num">{p?.mean !== undefined && p.mean !== null ? fmtNum(p.mean, 5) : "–"}</td>
                     <td><ProfileShape p={p} /></td>
@@ -423,7 +423,7 @@ function DatasetPanel({ detail, t }: { detail: DatasetDetail; t: T }) {
                   {detail.sample_rows.map((row, i) => (
                     <tr key={i}>
                       {detail.columns.map((c) => (
-                        <td key={c.name} className={NUMERIC.test(c.type) ? "num" : ""}>{fmt(row[c.name])}</td>
+                        <td key={c.name} className={NUMERIC.test(c.type) ? "num" : ""}>{fmt(row[c.name], c.type)}</td>
                       ))}
                     </tr>
                   ))}
@@ -447,7 +447,7 @@ function DatasetPanel({ detail, t }: { detail: DatasetDetail; t: T }) {
                   {result.rows.map((row, i) => (
                     <tr key={i}>
                       {result.columns.map((c) => (
-                        <td key={c.name} className={NUMERIC.test(c.type) ? "num" : ""}>{fmt(row[c.name])}</td>
+                        <td key={c.name} className={NUMERIC.test(c.type) ? "num" : ""}>{fmt(row[c.name], c.type)}</td>
                       ))}
                     </tr>
                   ))}
@@ -630,9 +630,15 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-function fmt(v: unknown): string {
+function fmt(v: unknown, type?: string): string {
   if (v === null || v === undefined) return "–";
   if (typeof v === "number") return fmtNum(v, 8);
+  if (typeof v === "string" && type && NUMERIC.test(type)) return fmtDecimalText(v);
   return String(v);
+}
+
+/** A column name as SQL: bare when it is a plain identifier, else "quoted". */
+function sqlIdent(name: string): string {
+  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) ? name : `"${name.replace(/"/g, '""')}"`;
 }
 

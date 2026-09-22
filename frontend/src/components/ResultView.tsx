@@ -82,6 +82,15 @@ export function fmtNum(v: unknown, digits = 6): string {
   return Number(v.toPrecision(digits)).toLocaleString(locale, { maximumFractionDigits: 8 });
 }
 
+/** An exact DECIMAL value, which the API sends as text ("-1150.00") so no
+ *  digit is lost: shown in the app's number style, keeping its decimals. */
+export function fmtDecimalText(v: string): string {
+  const m = /^(-?)(\d+)(?:\.(\d+))?$/.exec(v.trim());
+  if (!m || m[2].length > 15) return v;
+  const decimals = (m[3] ?? "").length;
+  return Number(v).toLocaleString(_numberLocale(), { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+}
+
 function fmtValue(v: unknown): ReactNode {
   if (typeof v === "number") return <span title={String(v)}>{fmtNum(v)}</span>;
   if (typeof v === "boolean") return v ? "true" : "false";
