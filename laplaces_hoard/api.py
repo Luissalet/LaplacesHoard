@@ -39,6 +39,7 @@ from .engines.units import UnitsError
 from .engines.dates import DateError
 from .engines.charts import ChartError
 from .hoard_link import Link
+from .hoard_link import family
 from .security import BrowserGuardMiddleware
 
 __version__ = "0.1.0"
@@ -385,7 +386,8 @@ def create_app(
             "name": DISPLAY_NAME,
             "version": __version__,
             "status": "ok",
-            "computations_logged": n_computations,
+            "computations_logged": n_computations,            "hoard_link": family.health_block(),
+
             "datasets_registered": n_datasets,
         }
 
@@ -791,5 +793,13 @@ def create_app(
                 "<p>API is live at <a href='/api/health'>/api/health</a>.</p>"
                 "</body></html>"
             )
+
+    # The family contract (Hoard Link 0.4): the shared GET /api/agent/tools +
+    # POST /api/agent/call over the per-tool routes above (which stay as they
+    # are), a bearer token in data/mcp-token, and one agent.call event per
+    # call on the hub's bus. Descriptions come from mcp_server.py's docstrings
+    # so the two catalogues never disagree.
+    family.install_fastapi(app, "laplace", str(data_dir),
+                           mcp_source=str(Path(__file__).with_name("mcp_server.py")))
 
     return app
