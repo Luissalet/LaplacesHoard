@@ -107,7 +107,9 @@ def _compact(payload: dict[str, Any]) -> dict[str, Any]:
 
 @mcp.tool(annotations=_RO)
 def calc(expression: str, precision: int = 15) -> dict:
-    """Exact arithmetic. Never do arithmetic in your head: call this, even for "simple" sums.
+    """Exact arithmetic and percentages (IVA, discounts, interest), cited. Calcular, cuánto es, porcentaje.
+
+    Exact arithmetic. Never do arithmetic in your head: call this, even for "simple" sums.
 
     Write Python-like syntax: + - * / // % ** (or ^), parentheses, comparisons.
     Functions: sqrt cbrt root(x, n) exp ln log(x, base) log10 log2, trig, floor
@@ -151,7 +153,9 @@ def math(
     matrix2: Optional[list[list[Union[str, float]]]] = None,
     function: Optional[str] = None,
 ) -> dict:
-    """Symbolic math with SymPy: solve equations, derivatives, integrals, limits, series, matrices.
+    """Symbolic math (SymPy): solve, derive, integrate, limits, matrices. Resolver ecuaciones, derivadas.
+
+    Symbolic math with SymPy: solve equations, derivatives, integrals, limits, series, matrices.
 
     `operation` is one of: simplify, expand, factor, apart, together, solve,
     nsolve, diff, integrate, limit, series, summation, product, matrix,
@@ -192,7 +196,9 @@ def math(
 
 @mcp.tool(annotations=_RO)
 def units_convert(quantity: str, to: str) -> dict:
-    """Convert a physical quantity to another unit, e.g. quantity="3.5 km/h", to="m/s".
+    """Convert a quantity between units (km/h to m/s, °F to °C). Convertir unidades, pasar a.
+
+    Convert a physical quantity to another unit, e.g. quantity="3.5 km/h", to="m/s".
 
     Handles compound inputs ("5 ft 11 in" to "cm"), temperatures with their
     offsets ("100 degF" to "degC" is 37.78, not a plain scale), and derived
@@ -233,7 +239,9 @@ def stats(
     trials: Optional[int] = None,
     p0: Optional[float] = None,
 ) -> dict:
-    """Descriptive statistics and hypothesis tests (SciPy), with a neutral one-line interpretation.
+    """Descriptive statistics and hypothesis tests with a plain reading. Estadística, media, p-valor.
+
+    Descriptive statistics and hypothesis tests (SciPy), with a neutral one-line interpretation.
 
     `test` is one of: describe, ttest_1samp (vs mu), ttest_ind (Welch),
     ttest_rel (paired), mannwhitneyu, wilcoxon, chi2_contingency and
@@ -285,7 +293,9 @@ def date_calc(
     to_tz: Optional[str] = None,
     text: Optional[str] = None,
 ) -> dict:
-    """Date arithmetic: days between dates, adding time, business days, weekdays, ages, time zones.
+    """Date arithmetic: days between dates, add time, business days, ages. Cuántos días, laborables.
+
+    Date arithmetic: days between dates, adding time, business days, weekdays, ages, time zones.
 
     `operation` and its arguments:
     - diff: start, end, unit days|weeks|months|years (also returns the
@@ -321,7 +331,9 @@ def date_calc(
 
 @mcp.tool(annotations=_RO)
 def data_list() -> dict:
-    """List the registered datasets: name, kind, row_count, column names.
+    """List the datasets registered for SQL. Listar datos, qué tablas hay.
+
+    List the registered datasets: name, kind, row_count, column names.
 
     Call this first when the user mentions a table or file and you do not
     know its dataset name. Query a dataset by its `name` in SQL. An empty
@@ -335,7 +347,9 @@ def data_list() -> dict:
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False))
 def data_register(path: str, name: Optional[str] = None, options: Optional[dict] = None) -> dict:
-    """Register a local file or folder so it can be queried with SQL: CSV/TSV, Parquet, JSON/NDJSON, Excel, SQLite.
+    """Register a local CSV, Excel, Parquet, JSON or SQLite file for SQL. Registrar archivo, cargar datos.
+
+    Register a local file or folder so it can be queried with SQL: CSV/TSV, Parquet, JSON/NDJSON, Excel, SQLite.
 
     `path` is an absolute path on this computer (e.g. C:\\Users\\me\\ventas.xlsx).
     The dataset name defaults to the file name made SQL-safe ("Ventas 2024"
@@ -366,7 +380,9 @@ def data_register(path: str, name: Optional[str] = None, options: Optional[dict]
 
 @mcp.tool(annotations=_RO)
 def data_describe(name: str) -> dict:
-    """Schema, row_count, per-column profile (nulls %, distinct, min/max/mean/sd, top values) and 5 sample rows.
+    """Schema, profile and sample rows of one dataset. Describir tabla, columnas, perfil de datos.
+
+    Schema, row_count, per-column profile (nulls %, distinct, min/max/mean/sd, top values) and 5 sample rows.
 
     Before answering anything about a table, call this, then data_query:
     never guess column names, types or row counts. `row_count` here is the
@@ -382,7 +398,9 @@ def data_describe(name: str) -> dict:
 
 @mcp.tool(annotations=_RO)
 def data_query(sql: str, limit: int = 50) -> dict:
-    """Run one read-only SQL query (DuckDB dialect) over the registered datasets.
+    """Run one read-only SQL query over the registered datasets. Consulta SQL, contar, agrupar.
+
+    Run one read-only SQL query (DuckDB dialect) over the registered datasets.
 
     Allowed: SELECT / WITH / DESCRIBE / SUMMARIZE / EXPLAIN / PIVOT, one
     statement; anything that writes or reads files directly is rejected.
@@ -406,7 +424,9 @@ def data_chart(
     sql: str, kind: str, x: str, y: Optional[str] = None, color: Optional[str] = None,
     title: Optional[str] = None, include_image: bool = False,
 ) -> list:
-    """Draw a chart from a read-only SQL query and save it; only returns the image if you ask.
+    """Chart from a read-only SQL query, saved to disk. Gráfico, gráfica, dibujar datos.
+
+    Draw a chart from a read-only SQL query and save it; only returns the image if you ask.
 
     kind: bar, line, area, scatter, histogram (x only), pie (x = category,
     y = value), heatmap (x and y). x, y and color are column names of the
@@ -455,7 +475,9 @@ def data_chart(
 
 @mcp.tool(annotations=_RO)
 def work_log(limit: int = 10, engine: Optional[str] = None, query: Optional[str] = None) -> dict:
-    """Recent computations from the work log (yours and the human's), newest first, each with its id.
+    """Recent computations with their citable ids, newest first. Historial de cálculos, qué calculé.
+
+    Recent computations from the work log (yours and the human's), newest first, each with its id.
 
     Use it to reuse a number computed earlier instead of recomputing or
     remembering it, or to look one up by id: query="L-000042" returns that
