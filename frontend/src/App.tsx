@@ -39,7 +39,6 @@ export default function App() {
           <div className="sidebar-brand-icon"><img src="/favicon-192.png" alt="" width={28} height={28} /></div>
           <div>
             <div className="sidebar-brand-name">{t("appName")}</div>
-            <div className="sidebar-brand-tagline">{t("tagline")}</div>
           </div>
         </div>
         {NAV.map((item) => (
