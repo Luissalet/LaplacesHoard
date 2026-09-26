@@ -111,7 +111,7 @@ async def ask(catalog: Catalog, link: Link, question: str, dataset_names: list[s
         return [{"role": "system", "content": _SYSTEM_PROMPT}, {"role": "user", "content": content}]
 
     try:
-        chat_result = await link.chat(_messages(), capability="llm", temperature=0.0, max_tokens=500)
+        chat_result = await link.chat(_messages(), capability="llm", temperature=0.0, max_tokens=500, effort="high")
     except (Unavailable, BackendError) as exc:
         raise AskError(f"the language model call failed: {exc}") from exc
 
@@ -127,7 +127,8 @@ async def ask(catalog: Catalog, link: Link, question: str, dataset_names: list[s
             "Fix it and answer again with exactly one fenced ```sql block."
         )
         try:
-            chat_result = await link.chat(_messages(retry_note), capability="llm", temperature=0.0, max_tokens=500)
+            chat_result = await link.chat(_messages(retry_note), capability="llm", temperature=0.0, max_tokens=500,
+                                          effort="high")
         except (Unavailable, BackendError) as exc:
             raise AskError(f"the language model retry failed: {exc}") from exc
         sql = _extract_sql(chat_result.text)
