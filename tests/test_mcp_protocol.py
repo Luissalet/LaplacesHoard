@@ -37,7 +37,7 @@ async def test_mcp_lists_all_tools_and_calls_calc_and_data_query(live_app):
             expected = {
                 "calc", "math", "units_convert", "stats", "date_calc",
                 "data_list", "data_register", "data_describe", "data_query",
-                "data_chart", "work_log",
+                "data_chart", "data_report", "report_rerun", "work_log",
             }
             assert expected.issubset(names), f"missing tools: {expected - names}"
 
@@ -46,7 +46,7 @@ async def test_mcp_lists_all_tools_and_calls_calc_and_data_query(live_app):
                 assert "Keywords:" in description, tool.name
                 assert tool.annotations is not None, tool.name
                 assert tool.annotations.openWorldHint is False, tool.name
-                assert tool.annotations.readOnlyHint is (tool.name != "data_register"), tool.name
+                assert tool.annotations.readOnlyHint is (tool.name not in {"data_register", "data_report", "report_rerun"}), tool.name
 
             calc_result = await session.call_tool("calc", {"expression": "0.1 + 0.2"})
             assert not calc_result.isError
@@ -64,6 +64,16 @@ async def test_mcp_lists_all_tools_and_calls_calc_and_data_query(live_app):
             )
             assert not query_result.isError, query_result.content
             assert '"n"' in query_result.content[0].text or "n" in query_result.content[0].text
+
+            report_result = await session.call_tool("data_report", {
+                "title": "Tiny values", "sql": "SELECT SUM(value) AS total FROM tiny",
+            })
+            assert not report_result.isError, report_result.content
+            report = json.loads(report_result.content[0].text)
+            assert report["rows"][0]["total"] == 60
+            rerun_result = await session.call_tool("report_rerun", {"id": report["id"]})
+            assert not rerun_result.isError, rerun_result.content
+            assert json.loads(rerun_result.content[0].text)["rows"][0]["total"] == 60
 
             # numbers in a matrix must pass the adapter's own argument validation
             det = await session.call_tool("math", {"operation": "matrix", "matrix_op": "det", "matrix": [[1, 2], [3, 4]]})

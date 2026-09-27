@@ -151,6 +151,8 @@ $env:LAPLACE_URL = "http://127.0.0.1:8812"
 | `data_describe` | yes | Schema, profile, sample rows |
 | `data_query` | yes | Read-only SQL |
 | `data_chart` | yes | Chart as an image |
+| `data_report` | no | Save a query, result and optional chart together in the Work log |
+| `report_rerun` | no | Run a saved report again on current data |
 | `work_log` | yes | Recall an earlier computation by id |
 
 It works with any MCP client over stdio; [docs/MCP.md](docs/MCP.md) has

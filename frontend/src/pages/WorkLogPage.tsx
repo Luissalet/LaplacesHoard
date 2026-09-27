@@ -4,7 +4,7 @@ import { api, type LogItem } from "../api";
 import type { DictKey } from "../i18n";
 import { CiteBadge, copyCite } from "../components/ResultView";
 
-const ENGINES = ["calc", "math", "units", "stats", "dates", "data", "log"];
+const ENGINES = ["calc", "math", "units", "stats", "dates", "data", "report", "log"];
 
 export function WorkLogPage({ t }: { t: (k: DictKey) => string }) {
   const [items, setItems] = useState<LogItem[]>([]);

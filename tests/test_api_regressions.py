@@ -195,6 +195,32 @@ def test_chart_image_is_servable_by_id_even_without_include_image(client, sample
     assert client.get(f"/api/charts/{non_chart['id']}").status_code == 404
 
 
+def test_saved_report_reruns_query_and_chart_on_current_data(client, sample_csv):
+    client.post("/api/agent/data_register", json={"path": str(sample_csv), "name": "sample"})
+    body = {
+        "title": "Ventas por región", "question": "¿Qué región vendió más?",
+        "sql": "SELECT region, SUM(amount) AS total FROM sample GROUP BY region ORDER BY total DESC",
+        "chart": {"kind": "bar", "x": "region", "y": "total"},
+    }
+    created = client.post("/api/agent/data_report", json=body)
+    assert created.status_code == 200, created.text
+    original = created.json()
+    assert original["rows"][0] == {"region": "North", "total": 220}
+    assert client.get(f"/api/charts/{original['id']}").content[:8] == b"\x89PNG\r\n\x1a\n"
+    logged = client.get(f"/api/log/{original['id']}").json()
+    assert logged["engine"] == "report" and logged["input"]["sql"] == body["sql"]
+
+    sample_csv.write_text("region,amount\nNorth,100\nSouth,400\n", encoding="utf-8")
+    client.post("/api/agent/data_register", json={"path": str(sample_csv), "name": "sample"})
+    refreshed = client.post("/api/agent/report_rerun", json={"id": original["id"]})
+    assert refreshed.status_code == 200, refreshed.text
+    current = refreshed.json()
+    assert current["id"] != original["id"]
+    assert current["rows"][0] == {"region": "South", "total": 400}
+    assert client.get(f"/api/charts/{current['id']}").content[:8] == b"\x89PNG\r\n\x1a\n"
+    assert client.get(f"/api/log/{original['id']}").json()["output"]["rows"][0]["total"] == 220
+
+
 def test_data_list_for_the_agent_is_compact(client, sample_csv):
     client.post("/api/agent/data_register", json={"path": str(sample_csv), "name": "sample"})
     ds = client.post("/api/agent/data_list").json()["datasets"]

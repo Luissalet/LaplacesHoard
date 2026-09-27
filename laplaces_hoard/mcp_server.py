@@ -469,6 +469,41 @@ def data_chart(
     return content
 
 
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False))
+def data_report(title: str, sql: str, question: Optional[str] = None,
+                chart: Optional[dict] = None, limit: int = 20) -> dict:
+    """Save a reproducible data report with query results and an optional chart. Informe de datos, guardar análisis.
+
+    Run one read-only SQL query and save its title, question, SQL, result rows and optional chart
+    together as a single work-log artifact. The optional chart has kind, x, y, color and title
+    like data_chart. The returned id opens the report in Laplace's Work log; its chart is at
+    chart_url. Call report_rerun(id) later to run the saved query again on current data.
+    Use data_describe first to learn column names. Cite the report id next to conclusions.
+
+    Keywords: save a report, repeatable analysis, informe reproducible, guardar informe.
+    """
+    result = _call("data_report", _compact({"title": title, "sql": sql, "question": question,
+                                           "chart": chart, "limit": limit}))
+    if chart and result.get("id"):
+        result["chart_url"] = f"{APP_URL}/api/charts/{result['id']}"
+    return result
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False))
+def report_rerun(id: str) -> dict:
+    """Re-run a saved Laplace data report against the current dataset. Repetir informe.
+
+    Pass the id returned by data_report. Returns a new report id and fresh SQL result;
+    the original report remains available for comparison in the Work log.
+
+    Keywords: refresh report, rerun analysis, actualizar informe, repetir análisis.
+    """
+    result = _call("report_rerun", {"id": id})
+    if result.get("chart") and result.get("id"):
+        result["chart_url"] = f"{APP_URL}/api/charts/{result['id']}"
+    return result
+
+
 # --------------------------------------------------------------------- #
 # work log
 # --------------------------------------------------------------------- #

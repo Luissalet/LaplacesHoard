@@ -237,6 +237,26 @@ class DataChartBody(BaseModel):
     include_image: bool = False
 
 
+class ReportChartBody(BaseModel):
+    kind: str
+    x: str
+    y: Optional[str] = None
+    color: Optional[str] = None
+    title: Optional[str] = None
+
+
+class DataReportBody(BaseModel):
+    title: str = Field(..., min_length=1, max_length=200)
+    sql: str = Field(..., min_length=1)
+    question: Optional[str] = Field(None, max_length=1000)
+    chart: Optional[ReportChartBody] = None
+    limit: int = Field(20, ge=1, le=50)
+
+
+class ReportRerunBody(BaseModel):
+    id: str
+
+
 class WorkLogQuery(BaseModel):
     limit: int = 10
     engine: Optional[str] = None
@@ -488,6 +508,19 @@ def create_app(
         def tool_data_chart(body: DataChartBody):
             return rec("data", "chart", body.model_dump(exclude_defaults=True), lambda: _chart(body, include_spec=(source == "ui")))
 
+        @app.post(f"{prefix}/data_report", name=f"{source}_data_report")
+        def tool_data_report(body: DataReportBody):
+            return rec("report", "create", body.model_dump(exclude_none=True), lambda: _report(body))
+
+        @app.post(f"{prefix}/report_rerun", name=f"{source}_report_rerun")
+        def tool_report_rerun(body: ReportRerunBody):
+            item = db.get_computation(state.conn, body.id)
+            if item is None or item["engine"] != "report" or not item["ok"]:
+                raise HTTPException(status_code=404, detail={"error": "not_found", "message": f"no saved report {body.id}"})
+            report = DataReportBody.model_validate(item["input"])
+            return rec("report", "rerun", {**report.model_dump(exclude_none=True), "parent_id": body.id},
+                       lambda: _report(report))
+
     def _chart(body: "DataChartBody", include_spec: bool) -> dict:
         out_path = state.data_dir / "charts" / f"chart_{time.time_ns()}.png"
         result = charts.build_chart(
@@ -517,6 +550,25 @@ def create_app(
             "_chart_path": str(out_path),
             "_response_extra": extra,
         }
+
+    def _report(body: DataReportBody) -> dict:
+        """One work-log artifact with the query, result and optional saved chart."""
+        result = state.catalog.query(body.sql, body.limit)
+        report: dict[str, Any] = {
+            "title": body.title, "question": body.question, "sql": body.sql,
+            "columns": result["columns"], "rows": result["rows"],
+            "row_count": result["row_count"], "total_rows": result["total_rows"],
+            "truncated": result["truncated"],
+        }
+        if body.chart is not None:
+            spec = body.chart
+            out_path = state.data_dir / "charts" / f"report_{time.time_ns()}.png"
+            chart = charts.build_chart(state.catalog, body.sql, spec.kind, spec.x, spec.y,
+                                       spec.color, spec.title or body.title, out_path=out_path)
+            report["chart"] = {"kind": spec.kind, "x": spec.x, "y": spec.y,
+                               "color": spec.color, "row_count": chart["row_count"]}
+            report["_chart_path"] = str(out_path)
+        return report
 
     _mount_tools("/api/agent", "agent")
     _mount_tools("/api/ui", "ui")
@@ -592,6 +644,8 @@ def create_app(
         elif engine_name == "stats":
             payload = {k: v for k, v in input_data.items() if k != "test" and v is not None}
             fn = lambda: stats.run(input_data.get("test", item["operation"]), catalog=state.catalog, **payload)  # noqa: E731
+        elif engine_name == "report":
+            fn = lambda: _report(DataReportBody.model_validate(input_data))  # noqa: E731
         elif engine_name in dispatch:
             fn = dispatch[engine_name]
         else:
