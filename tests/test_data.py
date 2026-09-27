@@ -21,6 +21,16 @@ def test_register_csv_and_query(catalog, sample_csv):
     assert r["rows"][0]["region"] == "North"
 
 
+def test_failed_reregistration_preserves_previous_dataset(catalog, sample_csv, tmp_path):
+    catalog.register(str(sample_csv), name="sample")
+    broken = tmp_path / "broken.parquet"
+    broken.write_text("not a parquet file", encoding="utf-8")
+    with pytest.raises(DataError):
+        catalog.register(str(broken), name="sample")
+    assert catalog.describe("sample")["source_path"] == str(sample_csv.resolve())
+    assert catalog.query("SELECT SUM(amount) AS total FROM sample")["rows"][0]["total"] == 650
+
+
 def test_profile_numbers_are_correct_on_a_known_table(catalog, sample_csv):
     catalog.register(str(sample_csv), name="sample")
     d = catalog.describe("sample")

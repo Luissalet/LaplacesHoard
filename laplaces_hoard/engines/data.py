@@ -423,47 +423,51 @@ class Catalog:
     ) -> dict:
         """Create TABLE (materialized) or VIEW (linked, for big files), profile it, store metadata."""
         with self._writable() as conn:
-            existing = self._existing_name(conn, view_name)
-            if existing and existing != view_name:
-                view_name = existing  # DuckDB identifiers are case-insensitive: keep the stored spelling
-            # "IF EXISTS" only suppresses "doesn't exist" — DuckDB still raises
-            # if the object exists but is the *other* kind (e.g. dropping a VIEW
-            # that is actually a TABLE), which re-registering the same path hits
-            # every time it flips linked/materialized. Try both, ignore whichever
-            # doesn't apply.
-            for stmt in (f'DROP VIEW IF EXISTS "{view_name}"', f'DROP TABLE IF EXISTS "{view_name}"'):
-                try:
-                    conn.execute(stmt)
-                except duckdb.Error:
-                    pass
-            linked = size > LINK_THRESHOLD_BYTES
-            numbers_converted: list[str] = []
-            if locale_numeric is not None:
-                dec, thou = locale_numeric
-                auto = not (dec or thou)
-                # a linked (>1 GB) file is not scanned for automatic detection
-                if not (auto and linked):
-                    select_sql, numbers_converted = _apply_locale_numbers(conn, select_sql, dec, thou, auto=auto)
-            kind_sql = "VIEW" if linked else "TABLE"
-            conn.execute(f'CREATE {kind_sql} "{view_name}" AS {select_sql}')
-            row_count = conn.execute(f'SELECT COUNT(*) FROM "{view_name}"').fetchone()[0]
-            columns = [{"name": r[0], "type": r[1]} for r in conn.execute(f'DESCRIBE "{view_name}"').fetchall()]
-            profile = _profile(conn, view_name, columns, row_count)
-            stat = source.stat() if source.exists() else None
-            meta = DatasetMeta(
-                name=view_name,
-                source_path=str(source),
-                kind=kind,
-                linked=linked,
-                row_count=row_count,
-                columns=columns,
-                profile=profile,
-                mtime=stat.st_mtime if stat else 0.0,
-                size=stat.st_size if stat else 0,
-                updated_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                options=options,
-            )
-            self._put_meta(conn, meta)
+            conn.execute("BEGIN TRANSACTION")
+            try:
+                existing = self._existing_name(conn, view_name)
+                if existing and existing != view_name:
+                    view_name = existing  # DuckDB identifiers are case-insensitive: keep the stored spelling
+                object_row = conn.execute(
+                    "SELECT table_type FROM information_schema.tables "
+                    "WHERE table_schema = current_schema() AND lower(table_name) = lower(?)",
+                    [view_name],
+                ).fetchone()
+                if object_row:
+                    object_kind = "VIEW" if object_row[0] == "VIEW" else "TABLE"
+                    conn.execute(f'DROP {object_kind} "{view_name}"')
+                linked = size > LINK_THRESHOLD_BYTES
+                numbers_converted: list[str] = []
+                if locale_numeric is not None:
+                    dec, thou = locale_numeric
+                    auto = not (dec or thou)
+                    # a linked (>1 GB) file is not scanned for automatic detection
+                    if not (auto and linked):
+                        select_sql, numbers_converted = _apply_locale_numbers(conn, select_sql, dec, thou, auto=auto)
+                kind_sql = "VIEW" if linked else "TABLE"
+                conn.execute(f'CREATE {kind_sql} "{view_name}" AS {select_sql}')
+                row_count = conn.execute(f'SELECT COUNT(*) FROM "{view_name}"').fetchone()[0]
+                columns = [{"name": r[0], "type": r[1]} for r in conn.execute(f'DESCRIBE "{view_name}"').fetchall()]
+                profile = _profile(conn, view_name, columns, row_count)
+                stat = source.stat() if source.exists() else None
+                meta = DatasetMeta(
+                    name=view_name,
+                    source_path=str(source),
+                    kind=kind,
+                    linked=linked,
+                    row_count=row_count,
+                    columns=columns,
+                    profile=profile,
+                    mtime=stat.st_mtime if stat else 0.0,
+                    size=stat.st_size if stat else 0,
+                    updated_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    options=options,
+                )
+                self._put_meta(conn, meta)
+                conn.execute("COMMIT")
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
         result = self.describe(view_name)
         if numbers_converted:
             sep = "decimal ',' and thousands '.'" if not (locale_numeric and any(locale_numeric)) else "the given separators"
