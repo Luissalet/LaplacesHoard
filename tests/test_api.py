@@ -58,6 +58,36 @@ def test_data_pipeline_register_describe_query(client: TestClient, sample_csv: P
     assert r.json()["rows"][0]["n"] == 6
 
 
+def test_nightingale_target_uses_shared_workbench_without_local_copy(client: TestClient, sample_csv: Path, monkeypatch):
+    from laplaces_hoard.hoard_link import family
+
+    calls = []
+
+    def fake_call(app, tool, arguments):
+        calls.append((app, tool, arguments))
+        return {"ok": True, "result": {"datasets": [{"name": "shared"}]} if tool == "data_list"
+                else {"name": "shared", "row_count": 6}}
+
+    monkeypatch.setattr(family, "call", fake_call)
+    registered = client.post("/api/agent/data_register", json={"path": str(sample_csv), "name": "shared",
+                                                       "target": "nightingale"})
+    assert registered.status_code == 200
+    assert registered.json()["target"] == "nightingale"
+    assert calls[0] == ("nightingale", "data_ingest", {"kind": "file", "path": str(sample_csv),
+                                                      "name": "shared", "options": {}})
+    assert client.post("/api/agent/data_list").json()["datasets"] == []
+    assert client.post("/api/agent/data_list", json={"target": "nightingale"}).json()["datasets"][0]["name"] == "shared"
+
+
+def test_nightingale_failure_is_explicit_and_logged(client: TestClient, sample_csv: Path, monkeypatch):
+    from laplaces_hoard.hoard_link import family
+    monkeypatch.setattr(family, "call", lambda *args: {"ok": False, "error": "app unavailable"})
+    response = client.post("/api/agent/data_register", json={"path": str(sample_csv), "target": "nightingale"})
+    assert response.status_code == 400
+    assert "app unavailable" in response.json()["message"]
+    assert client.post("/api/agent/data_list").json()["datasets"] == []
+
+
 def test_data_query_rejects_write_statement(client: TestClient, sample_csv: Path):
     client.post("/api/agent/data_register", json={"path": str(sample_csv), "name": "sample"})
     r = client.post("/api/agent/data_query", json={"sql": "DELETE FROM sample"})

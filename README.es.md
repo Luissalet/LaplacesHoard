@@ -133,6 +133,19 @@ por qué, con un botón de volver a comprobar y configuración manual
 
 ## Conectarlo a Faustus
 
+### Datos compartidos con Nightingale
+
+Para un conjunto de datos que también quieras limpiar, versionar o usar en
+paneles, registra el archivo con `data_register(path=..., target="nightingale")`.
+Laplace envía la llamada a Nightingale por Hoard Hub y no crea otra copia en su
+catálogo. Usa el mismo `target="nightingale"` en `data_list`, `data_describe` y
+`data_query`. El valor por defecto sigue siendo `laplace` para los conjuntos
+ya registrados aquí y para las funciones que dependen de este catálogo
+(`stats` sobre columnas, gráficos e informes). Si Nightingale o el Hub no
+responden, la operación falla de forma explícita; no se crea una copia local
+silenciosa. Los archivos ya registrados en Laplace no se migran ni borran
+automáticamente.
+
 Laplace's Hoard es un plugin de [Faustus](https://github.com/Luissalet/Faustus)
 y se declara con `faustus-plugin.json` en la raíz del repositorio. Arranca
 la aplicación y en Faustus abre **Conectores → Aplicaciones cercanas →

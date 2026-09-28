@@ -208,15 +208,22 @@ class DataRegisterBody(BaseModel):
     path: str
     name: Optional[str] = None
     options: Optional[dict] = None
+    target: Literal["laplace", "nightingale"] = "laplace"
+
+
+class DataListBody(BaseModel):
+    target: Literal["laplace", "nightingale"] = "laplace"
 
 
 class DataDescribeBody(BaseModel):
     name: str
+    target: Literal["laplace", "nightingale"] = "laplace"
 
 
 class DataQueryBody(BaseModel):
     sql: str
     limit: int = 50
+    target: Literal["laplace", "nightingale"] = "laplace"
 
 
 class ExportCsvBody(BaseModel):
@@ -487,22 +494,40 @@ def create_app(
         def tool_date_calc(body: DateCalcBody):
             return rec("dates", body.operation, body.model_dump(exclude_defaults=True), lambda: _dispatch_date(body))
 
+        def workbench(tool: str, args: dict) -> dict:
+            response = family.call("nightingale", tool, args)
+            if not response.get("ok"):
+                raise DataError("Nightingale is unavailable or refused the request: " + str(response.get("error") or "unknown error"))
+            result = response.get("result")
+            if not isinstance(result, dict):
+                raise DataError("Nightingale returned an unexpected result")
+            return {"target": "nightingale", **result}
+
         @app.post(f"{prefix}/data_list", name=f"{source}_data_list")
-        def tool_data_list():
-            return rec("data", "list", {}, lambda: {"datasets": [_dataset_brief(d) for d in state.catalog.list_datasets()]})
+        def tool_data_list(body: DataListBody = DataListBody()):
+            return rec("data", "list", body.model_dump(),
+                       lambda: workbench("data_list", {}) if body.target == "nightingale"
+                       else {"datasets": [_dataset_brief(d) for d in state.catalog.list_datasets()]})
 
         @app.post(f"{prefix}/data_register", name=f"{source}_data_register")
         def tool_data_register(body: DataRegisterBody):
             return rec("data", "register", body.model_dump(),
-                       lambda: state.catalog.register(body.path, body.name, body.options))
+                       lambda: workbench("data_ingest", {"kind": "folder" if Path(body.path).is_dir() else "file",
+                                                              "path": body.path, "name": body.name,
+                                                              "options": body.options or {}})
+                       if body.target == "nightingale" else state.catalog.register(body.path, body.name, body.options))
 
         @app.post(f"{prefix}/data_describe", name=f"{source}_data_describe")
         def tool_data_describe(body: DataDescribeBody):
-            return rec("data", "describe", body.model_dump(), lambda: state.catalog.describe(body.name))
+            return rec("data", "describe", body.model_dump(),
+                       lambda: workbench("data_profile", {"dataset": body.name})
+                       if body.target == "nightingale" else state.catalog.describe(body.name))
 
         @app.post(f"{prefix}/data_query", name=f"{source}_data_query")
         def tool_data_query(body: DataQueryBody):
-            return rec("data", "query", body.model_dump(exclude_defaults=True), lambda: state.catalog.query(body.sql, body.limit))
+            return rec("data", "query", body.model_dump(exclude_defaults=True),
+                       lambda: workbench("data_query", {"sql": body.sql, "limit": body.limit})
+                       if body.target == "nightingale" else state.catalog.query(body.sql, body.limit))
 
         @app.post(f"{prefix}/data_chart", name=f"{source}_data_chart")
         def tool_data_chart(body: DataChartBody):

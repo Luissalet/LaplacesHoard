@@ -330,7 +330,7 @@ def date_calc(
 # --------------------------------------------------------------------- #
 
 @mcp.tool(annotations=_RO)
-def data_list() -> dict:
+def data_list(target: str = "laplace") -> dict:
     """List the datasets registered for SQL. Listar datos, qué tablas hay.
 
     List the registered datasets: name, kind, row_count, column names.
@@ -341,12 +341,16 @@ def data_list() -> dict:
 
     Keywords: what data do you have, list datasets, tables, files, spreadsheets,
     qué datos hay, qué tablas hay, lista de datasets, archivos, hojas de cálculo.
+
+    Use target="nightingale" to list the shared data workbench instead of
+    Laplace's local catalogue. Nightingale must be running through Hoard Hub.
     """
-    return _call("data_list", {})
+    return _call("data_list", {"target": target})
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False))
-def data_register(path: str, name: Optional[str] = None, options: Optional[dict] = None) -> dict:
+def data_register(path: str, name: Optional[str] = None, options: Optional[dict] = None,
+                  target: str = "laplace") -> dict:
     """Register a local CSV, Excel, Parquet, JSON or SQLite file for SQL. Registrar archivo, cargar datos.
 
     Register a local file or folder so it can be queried with SQL: CSV/TSV, Parquet, JSON/NDJSON, Excel, SQLite.
@@ -366,6 +370,9 @@ def data_register(path: str, name: Optional[str] = None, options: Optional[dict]
     column as text, or both separators to force another convention.
     Excel also takes skip_rows (a title row above the real header is
     detected and skipped automatically; set this to override).
+    Set target="nightingale" to register only in Nightingale's shared
+    workbench via Hoard Hub; this avoids copying the dataset into two catalogues.
+    Then use target="nightingale" with data_list, data_describe and data_query.
     Returns the schema and profile (like data_describe); a single-row result
     with nested list columns also gets a `hint` suggesting UNNEST.
     Re-registering the same path refreshes it. Not read-only: it copies the
@@ -375,11 +382,11 @@ def data_register(path: str, name: Optional[str] = None, options: Optional[dict]
     CSV, read Excel, cargar este archivo, abrir esta hoja de cálculo,
     registrar datos, importar CSV, leer Excel.
     """
-    return _call("data_register", {"path": path, "name": name, "options": options or {}})
+    return _call("data_register", {"path": path, "name": name, "options": options or {}, "target": target})
 
 
 @mcp.tool(annotations=_RO)
-def data_describe(name: str) -> dict:
+def data_describe(name: str, target: str = "laplace") -> dict:
     """Schema, profile and sample rows of one dataset. Describir tabla, columnas, perfil de datos.
 
     Schema, row_count, per-column profile (nulls %, distinct, min/max/mean/sd, top values) and 5 sample rows.
@@ -392,12 +399,13 @@ def data_describe(name: str) -> dict:
     Keywords: describe this dataset, what columns, schema, how many rows,
     column types, summary of the table, describe este dataset, qué columnas,
     esquema, cuántas filas, tipos de columna, resumen de la tabla.
+    Set target="nightingale" for a dataset in Nightingale's workbench.
     """
-    return _call("data_describe", {"name": name})
+    return _call("data_describe", {"name": name, "target": target})
 
 
 @mcp.tool(annotations=_RO)
-def data_query(sql: str, limit: int = 50) -> dict:
+def data_query(sql: str, limit: int = 50, target: str = "laplace") -> dict:
     """Run one read-only SQL query over the registered datasets. Consulta SQL, contar, agrupar.
 
     Run one read-only SQL query (DuckDB dialect) over the registered datasets.
@@ -415,8 +423,9 @@ def data_query(sql: str, limit: int = 50) -> dict:
     Keywords: query the data, SQL, filter rows, group by, total of, sum of,
     average of, count, top 10, consultar los datos, filtrar, agrupar por,
     total de, suma de, media de, contar, los 10 primeros.
+    Set target="nightingale" to query the shared workbench catalogue.
     """
-    return _call("data_query", {"sql": sql, "limit": limit})
+    return _call("data_query", {"sql": sql, "limit": limit, "target": target})
 
 
 @mcp.tool(annotations=_RO)
