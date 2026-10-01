@@ -1,4 +1,27 @@
+/* Dark by default through the shared Hoard tokens (hoard-theme.css);
+   the original light palette stays available via data-theme="light". */
 :root {
+  --accent: var(--hoard-accent);
+  --accent-strong: var(--hoard-accent-strong);
+  --accent-soft: var(--hoard-accent-soft);
+  --bg: var(--hoard-deep);
+  --bg-elevated: var(--hoard-surface);
+  --bg-sunken: var(--hoard-sunken);
+  --border: var(--hoard-border);
+  --text: var(--hoard-text);
+  --text-muted: var(--hoard-text-muted);
+  --text-faint: var(--hoard-text-dim);
+  --danger: #e2685a;
+  --danger-soft: rgba(226, 104, 90, 0.14);
+  --ok: #7cc98a;
+  --shadow: var(--hoard-shadow);
+  --radius: var(--hoard-radius-lg);
+  --radius-sm: var(--hoard-radius);
+  --font-sans: "Inter Variable", var(--hoard-font-sans);
+  --font-mono: "JetBrains Mono Variable", var(--hoard-font-mono);
+}
+
+:root[data-theme="light"] {
   --accent: #6fa72e;
   --accent-strong: #598c22;
   --accent-soft: #e3f0d4;
@@ -19,41 +42,6 @@
   --font-mono: "JetBrains Mono Variable", ui-monospace, "SFMono-Regular", Menlo, monospace;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --accent: #9ed957;
-    --accent-strong: #b6f06a;
-    --accent-soft: #263a17;
-    --bg: #161813;
-    --bg-elevated: #1e211a;
-    --bg-sunken: #101210;
-    --border: #2c3025;
-    --text: #eef1e8;
-    --text-muted: #a6ac9c;
-    --text-faint: #6f7568;
-    --danger: #e2685a;
-    --danger-soft: #3a1f1b;
-    --ok: #7cc98a;
-    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.35);
-  }
-}
-
-:root[data-theme="dark"] {
-  --accent: #9ed957;
-  --accent-strong: #b6f06a;
-  --accent-soft: #263a17;
-  --bg: #161813;
-  --bg-elevated: #1e211a;
-  --bg-sunken: #101210;
-  --border: #2c3025;
-  --text: #eef1e8;
-  --text-muted: #a6ac9c;
-  --text-faint: #6f7568;
-  --danger: #e2685a;
-  --danger-soft: #3a1f1b;
-  --ok: #7cc98a;
-  --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.35);
-}
 
 * { box-sizing: border-box; }
 
@@ -446,3 +434,43 @@ button.chip:hover { border-color: var(--accent); color: var(--text); }
 
 .result-value .katex-display { text-align: left; margin: 0; }
 .result-value .katex-display > .katex { text-align: left; }
+
+/* ---- Hoard family chrome (matches the shared look) ---- */
+.sidebar { width: var(--hoard-sidebar-w); padding: 0 12px 12px; gap: 2px; background: var(--hoard-surface); border-right: 1px solid var(--hoard-border); }
+.sidebar-brand { height: var(--hoard-header-h); margin: 0 -12px 12px; padding: 0 16px; border-bottom: 1px solid var(--hoard-border); flex-shrink: 0; }
+.sidebar-brand-icon { width: 32px; height: 32px; border-radius: 8px; }
+.sidebar-brand-name { font-family: var(--hoard-font-serif); font-weight: 700; font-size: 15px; letter-spacing: 0; color: var(--hoard-accent); }
+.nav-item { height: 40px; padding: 0 12px; border-radius: var(--hoard-radius); font-size: 14px; font-weight: 400; color: var(--hoard-text-muted); flex-shrink: 0; }
+.nav-item:hover { background: var(--hoard-elevated); color: var(--hoard-text); }
+.nav-item.active { background: var(--hoard-elevated); color: var(--hoard-text); }
+.nav-item.active svg { color: var(--hoard-accent); }
+.topbar { height: var(--hoard-header-h); background: var(--hoard-deep); border-bottom: 1px solid var(--hoard-border); }
+.topbar-title { font-weight: 600; font-size: 15px; }
+.card:hover { border-color: var(--hoard-border-hover); }
+.card .card:hover { border-color: var(--hoard-border); }
+button.btn { color: var(--hoard-accent-ink); border-radius: var(--hoard-radius); min-height: 36px; }
+button.btn-ghost { border-radius: var(--hoard-radius); min-height: 36px; }
+button.btn-ghost:hover, button.icon-btn:hover { background: var(--hoard-elevated); }
+.pill-select button.active { color: var(--hoard-accent-ink); }
+input[type="text"], input[type="password"], input[type="number"], input[type="search"], select, textarea { background: var(--hoard-surface); border-radius: var(--hoard-radius); }
+input::placeholder, textarea::placeholder { color: var(--hoard-text-dim); }
+.badge { border-radius: var(--hoard-radius-sm); }
+.chip { background: var(--hoard-elevated); border-radius: var(--hoard-radius-sm); }
+table.data-table th { color: var(--hoard-text-dim); text-transform: none; font-size: 12px; }
+.headline-value { font-family: var(--hoard-font-serif); }
+
+/* Light option: back to the original light surfaces. */
+:root[data-theme="light"] .sidebar { background: var(--bg-elevated); border-right-color: var(--border); }
+:root[data-theme="light"] .sidebar-brand { border-bottom-color: var(--border); }
+:root[data-theme="light"] .nav-item { color: var(--text-muted); }
+:root[data-theme="light"] .nav-item:hover { background: var(--bg-sunken); color: var(--text); }
+:root[data-theme="light"] .nav-item.active { background: var(--accent-soft); color: var(--accent-strong); }
+:root[data-theme="light"] .topbar { background: var(--bg-elevated); }
+:root[data-theme="light"] button.btn { color: #14150f; }
+:root[data-theme="light"] button.btn-ghost:hover,
+:root[data-theme="light"] button.icon-btn:hover { background: var(--bg-sunken); }
+:root[data-theme="light"] .pill-select button.active { color: #14150f; }
+:root[data-theme="light"] input[type="text"], :root[data-theme="light"] input[type="password"],
+:root[data-theme="light"] input[type="number"], :root[data-theme="light"] input[type="search"],
+:root[data-theme="light"] select, :root[data-theme="light"] textarea { background: var(--bg-sunken); }
+:root[data-theme="light"] .chip { background: var(--bg-sunken); }
