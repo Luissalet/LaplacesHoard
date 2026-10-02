@@ -19,7 +19,7 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any, Callable, Literal, Optional, Union
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -39,8 +39,8 @@ from .engines.units import UnitsError
 from .engines.dates import DateError
 from .engines.charts import ChartError
 from .hoard_link import Link
-from .hoard_link import family
-from .security import BrowserGuardMiddleware
+from .hoard_link import family, tokens
+from .hoard_link.guard import install_guard
 
 __version__ = "0.1.0"
 SERVICE_SLUG = "laplaces-hoard"
@@ -317,8 +317,19 @@ def create_app(
         await state.link.aclose()
 
     app = FastAPI(title=DISPLAY_NAME, version=__version__, lifespan=_lifespan)
-    app.add_middleware(BrowserGuardMiddleware, port=port)
+    # The shared request guard (loopback Host, Origin and Fetch Metadata rules; LAPLACE_ALLOWED_HOSTS opens a LAN name or
+    # a tailnet). strict_ports keeps the old rule that the Host names this app's own port.
+    install_guard(app, port_getter=lambda: port, allowed_env="LAPLACE_ALLOWED_HOSTS", strict_ports=True)
     app.state.lh = state
+
+    # The per-tool routes /api/agent/<tool> run the assistant's tools: they need the same bearer token as
+    # POST /api/agent/call (data/mcp-token), which the MCP adapter sends. /api/ui/<tool> (the web UI) stays open.
+    token_file = data_dir / "mcp-token"
+    tokens.read_or_create_token(token_file)
+
+    def require_agent_token(request: Request) -> None:
+        if not tokens.check_bearer(request.headers.get("authorization"), tokens.read_token(token_file) or ""):
+            raise HTTPException(status_code=401, detail={"error": "unauthorized", "message": "Missing or invalid MCP token (see data/mcp-token)."})
 
     # Errors always come back as {"error": "<code>", "message": "<actionable text>"}.
     @app.exception_handler(StarletteHTTPException)
@@ -462,15 +473,15 @@ def create_app(
     # logged as "ui") — so "Assistant activity" only ever shows the model.
     # ------------------------------------------------------------------ #
 
-    def _mount_tools(prefix: str, source: str) -> None:
+    def _mount_tools(prefix: str, source: str, dependencies: Optional[list] = None) -> None:
         def rec(engine: str, operation: str, input_data: Any, fn):
             return _record(engine, operation, input_data, source, fn)
 
-        @app.post(f"{prefix}/calc", name=f"{source}_calc")
+        @app.post(f"{prefix}/calc", name=f"{source}_calc", dependencies=dependencies)
         def tool_calc(body: CalcBody):
             return rec("calc", "compute", body.model_dump(exclude_defaults=True), lambda: _calc(body.expression, body.precision))
 
-        @app.post(f"{prefix}/math", name=f"{source}_math")
+        @app.post(f"{prefix}/math", name=f"{source}_math", dependencies=dependencies)
         def tool_math(body: MathBody):
             payload = body.model_dump(exclude_none=True)
             op = payload.pop("operation")
@@ -479,18 +490,18 @@ def create_app(
                 payload["expressions"] = [payload.pop("expression")]
             return rec("math", op, body.model_dump(exclude_defaults=True), lambda: symbolic.run(op, timeout=timeout, **payload))
 
-        @app.post(f"{prefix}/units_convert", name=f"{source}_units_convert")
+        @app.post(f"{prefix}/units_convert", name=f"{source}_units_convert", dependencies=dependencies)
         def tool_units_convert(body: UnitsConvertBody):
             return rec("units", "convert", body.model_dump(),
                        lambda: _units("convert", quantity=body.quantity, to=body.to))
 
-        @app.post(f"{prefix}/stats", name=f"{source}_stats")
+        @app.post(f"{prefix}/stats", name=f"{source}_stats", dependencies=dependencies)
         def tool_stats(body: StatsBody):
             payload = body.model_dump(exclude={"test"})
             return rec("stats", body.test, body.model_dump(exclude_defaults=True),
                        lambda: stats.run(body.test, catalog=state.catalog, **payload))
 
-        @app.post(f"{prefix}/date_calc", name=f"{source}_date_calc")
+        @app.post(f"{prefix}/date_calc", name=f"{source}_date_calc", dependencies=dependencies)
         def tool_date_calc(body: DateCalcBody):
             return rec("dates", body.operation, body.model_dump(exclude_defaults=True), lambda: _dispatch_date(body))
 
@@ -503,13 +514,13 @@ def create_app(
                 raise DataError("Nightingale returned an unexpected result")
             return {"target": "nightingale", **result}
 
-        @app.post(f"{prefix}/data_list", name=f"{source}_data_list")
+        @app.post(f"{prefix}/data_list", name=f"{source}_data_list", dependencies=dependencies)
         def tool_data_list(body: DataListBody = DataListBody()):
             return rec("data", "list", body.model_dump(),
                        lambda: workbench("data_list", {}) if body.target == "nightingale"
                        else {"datasets": [_dataset_brief(d) for d in state.catalog.list_datasets()]})
 
-        @app.post(f"{prefix}/data_register", name=f"{source}_data_register")
+        @app.post(f"{prefix}/data_register", name=f"{source}_data_register", dependencies=dependencies)
         def tool_data_register(body: DataRegisterBody):
             return rec("data", "register", body.model_dump(),
                        lambda: workbench("data_ingest", {"kind": "folder" if Path(body.path).is_dir() else "file",
@@ -517,27 +528,27 @@ def create_app(
                                                               "options": body.options or {}})
                        if body.target == "nightingale" else state.catalog.register(body.path, body.name, body.options))
 
-        @app.post(f"{prefix}/data_describe", name=f"{source}_data_describe")
+        @app.post(f"{prefix}/data_describe", name=f"{source}_data_describe", dependencies=dependencies)
         def tool_data_describe(body: DataDescribeBody):
             return rec("data", "describe", body.model_dump(),
                        lambda: workbench("data_profile", {"dataset": body.name})
                        if body.target == "nightingale" else state.catalog.describe(body.name))
 
-        @app.post(f"{prefix}/data_query", name=f"{source}_data_query")
+        @app.post(f"{prefix}/data_query", name=f"{source}_data_query", dependencies=dependencies)
         def tool_data_query(body: DataQueryBody):
             return rec("data", "query", body.model_dump(exclude_defaults=True),
                        lambda: workbench("data_query", {"sql": body.sql, "limit": body.limit})
                        if body.target == "nightingale" else state.catalog.query(body.sql, body.limit))
 
-        @app.post(f"{prefix}/data_chart", name=f"{source}_data_chart")
+        @app.post(f"{prefix}/data_chart", name=f"{source}_data_chart", dependencies=dependencies)
         def tool_data_chart(body: DataChartBody):
             return rec("data", "chart", body.model_dump(exclude_defaults=True), lambda: _chart(body, include_spec=(source == "ui")))
 
-        @app.post(f"{prefix}/data_report", name=f"{source}_data_report")
+        @app.post(f"{prefix}/data_report", name=f"{source}_data_report", dependencies=dependencies)
         def tool_data_report(body: DataReportBody):
             return rec("report", "create", body.model_dump(exclude_none=True), lambda: _report(body))
 
-        @app.post(f"{prefix}/report_rerun", name=f"{source}_report_rerun")
+        @app.post(f"{prefix}/report_rerun", name=f"{source}_report_rerun", dependencies=dependencies)
         def tool_report_rerun(body: ReportRerunBody):
             item = db.get_computation(state.conn, body.id)
             if item is None or item["engine"] != "report" or not item["ok"]:
@@ -595,10 +606,10 @@ def create_app(
             report["_chart_path"] = str(out_path)
         return report
 
-    _mount_tools("/api/agent", "agent")
+    _mount_tools("/api/agent", "agent", dependencies=[Depends(require_agent_token)])
     _mount_tools("/api/ui", "ui")
 
-    @app.post("/api/agent/work_log")
+    @app.post("/api/agent/work_log", dependencies=[Depends(require_agent_token)])
     def agent_work_log(body: WorkLogQuery):
         def _run():
             limit = max(1, min(body.limit, 50))

@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import sys
+from pathlib import Path
 from typing import Any, Optional, Union
 from urllib.parse import urlparse
 
@@ -45,7 +46,30 @@ def _resolve_app_url() -> str:
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
 APP_URL = _resolve_app_url()
-_client = httpx.Client(base_url=APP_URL, timeout=30.0)
+# trust_env=False: a system or corporate proxy (httpx reads the registry proxy settings on Windows) must never see, or
+# break, loopback traffic.
+_client = httpx.Client(base_url=APP_URL, timeout=30.0, trust_env=False)
+
+
+def _token_file() -> Path:
+    """``$LAPLACE_TOKEN_FILE``, else ``<$LAPLACE_DATA_DIR or the repo's data folder>/mcp-token`` (what the app writes)."""
+    explicit = os.environ.get("LAPLACE_TOKEN_FILE", "").strip()
+    if explicit:
+        return Path(explicit)
+    data = os.environ.get("LAPLACE_DATA_DIR", "").strip()
+    return (Path(data) if data else Path(__file__).resolve().parent.parent / "data") / "mcp-token"
+
+
+def _token() -> str:
+    """The bearer token the app requires on /api/agent/<tool>: ``$LAPLACE_TOKEN`` or the token file, read on every call
+    (the app may have created it after this adapter started)."""
+    given = os.environ.get("LAPLACE_TOKEN", "").strip()
+    if given:
+        return given
+    try:
+        return _token_file().read_text(encoding="utf-8-sig").strip()
+    except OSError:
+        return ""
 
 mcp = FastMCP(
     DISPLAY_NAME,
@@ -72,7 +96,8 @@ _RO = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=T
 
 def _call(tool: str, payload: dict[str, Any]) -> dict[str, Any]:
     try:
-        resp = _client.post(f"/api/agent/{tool}", json=payload)
+        token = _token()
+        resp = _client.post(f"/api/agent/{tool}", json=payload, headers={"Authorization": f"Bearer {token}"} if token else {})
     except httpx.ConnectError as exc:
         raise ToolError(_UNAVAILABLE) from exc
     except httpx.TimeoutException as exc:
@@ -82,6 +107,11 @@ def _call(tool: str, payload: dict[str, Any]) -> dict[str, Any]:
         ) from exc
     except httpx.HTTPError as exc:
         raise ToolError(f"{SERVICE_SLUG}_unavailable: could not reach {DISPLAY_NAME} ({type(exc).__name__})") from exc
+    if resp.status_code == 401:
+        raise ToolError(
+            f"{SERVICE_SLUG}_unauthorized: {DISPLAY_NAME} refused this adapter's token; it reads {_token_file()} "
+            "(set LAPLACE_DATA_DIR / LAPLACE_TOKEN_FILE if the app uses another data folder)."
+        )
     if resp.status_code >= 400:
         try:
             body = resp.json()

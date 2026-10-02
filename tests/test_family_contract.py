@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from laplaces_hoard.api import create_app
 from laplaces_hoard.hoard_link import family
+from conftest import agent_headers
 
 PORT = 8812
 MCP_SOURCE = Path(__file__).resolve().parents[1] / "laplaces_hoard" / "mcp_server.py"
@@ -16,7 +17,7 @@ MCP_SOURCE = Path(__file__).resolve().parents[1] / "laplaces_hoard" / "mcp_serve
 
 def _client(tmp_path):
     app = create_app(data_dir=tmp_path / 'data', static_dir=None, port=PORT)
-    return TestClient(app, base_url=f"http://127.0.0.1:{PORT}")
+    return TestClient(app, base_url=f"http://127.0.0.1:{PORT}", headers=agent_headers(app))
 
 
 def test_catalogue_matches_the_mcp_adapter(tmp_path):
@@ -37,7 +38,8 @@ def test_call_needs_the_token_and_dispatches(tmp_path):
         token_file = tmp_path / "data" / "mcp-token"
         assert token_file.is_file() and token_file.read_text().strip()
         first = c.get("/api/agent/tools").json()["tools"][0]["name"]
-        assert c.post("/api/agent/call", json={"name": first, "arguments": {}}).status_code == 401
+        assert c.post("/api/agent/call", json={"name": first, "arguments": {}},
+                      headers={"Authorization": "Bearer not-the-token"}).status_code == 401
         headers = {"Authorization": "Bearer " + token_file.read_text().strip()}
         r = c.post("/api/agent/call", json={"name": "no_such_tool", "arguments": {}}, headers=headers)
         assert r.status_code == 404 and first in r.json()["tools"]

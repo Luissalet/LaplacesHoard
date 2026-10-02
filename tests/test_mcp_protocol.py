@@ -25,7 +25,7 @@ async def test_mcp_lists_all_tools_and_calls_calc_and_data_query(live_app):
     params = StdioServerParameters(
         command=sys.executable,
         args=[str(MCP_SERVER_PATH)],
-        env={**os.environ, "LAPLACE_URL": live_app.base_url},
+        env={**os.environ, "LAPLACE_URL": live_app.base_url, "LAPLACE_DATA_DIR": str(live_app.data_dir)},
     )
 
     async with stdio_client(params) as (read, write):
@@ -124,7 +124,7 @@ async def test_mcp_stats_accepts_a_2d_contingency_table(live_app):
     params = StdioServerParameters(
         command=sys.executable,
         args=[str(MCP_SERVER_PATH)],
-        env={**os.environ, "LAPLACE_URL": live_app.base_url},
+        env={**os.environ, "LAPLACE_URL": live_app.base_url, "LAPLACE_DATA_DIR": str(live_app.data_dir)},
     )
     async with stdio_client(params) as (read, write):
         async with ClientSession(read, write) as session:

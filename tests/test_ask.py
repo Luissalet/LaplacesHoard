@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 
 from laplaces_hoard.api import create_app
 from laplaces_hoard.hoard_link import CapabilityConfig, Link, LinkConfig
+from conftest import agent_headers
 
 
 def _openai_chat_response(content: str) -> httpx.Response:
@@ -33,7 +34,7 @@ def _mock_link(handler) -> Link:
 def client_with_link(data_dir: Path):
     def make(handler):
         app = create_app(data_dir=data_dir, static_dir=None, port=8812, link_factory=lambda: _mock_link(handler))
-        return TestClient(app, base_url="http://127.0.0.1:8812")
+        return TestClient(app, base_url="http://127.0.0.1:8812", headers=agent_headers(app))
     return make
 
 
@@ -149,7 +150,7 @@ def test_ask_is_honestly_unavailable_with_no_model_resolved(data_dir: Path, samp
         return Link(LinkConfig.load(None, env={}, app="laplace"), client=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
 
     app = create_app(data_dir=data_dir, static_dir=None, port=8812, link_factory=factory)
-    client = TestClient(app, base_url="http://127.0.0.1:8812")
+    client = TestClient(app, base_url="http://127.0.0.1:8812", headers=agent_headers(app))
     r = client.post("/api/agent/data_register", json={"path": str(sample_csv), "name": "sample"})
     assert r.status_code == 200
 

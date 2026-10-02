@@ -80,3 +80,9 @@ def live_app(tmp_path: Path):
 
     server.should_exit = True
     thread.join(timeout=5)
+
+
+def agent_headers(app) -> dict:
+    """The headers the MCP adapter sends: the app requires its bearer token on every /api/agent/<tool> route."""
+    token = (app.state.lh.data_dir / "mcp-token").read_text(encoding="utf-8").strip()
+    return {"Authorization": f"Bearer {token}"}

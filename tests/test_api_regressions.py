@@ -9,6 +9,7 @@ import uvicorn
 from fastapi.testclient import TestClient
 
 from laplaces_hoard.api import create_app
+from conftest import agent_headers
 
 from conftest import free_port
 
@@ -16,7 +17,7 @@ from conftest import free_port
 @pytest.fixture()
 def client(data_dir: Path) -> TestClient:
     app = create_app(data_dir=data_dir, static_dir=None, port=8812)
-    return TestClient(app, base_url="http://127.0.0.1:8812", raise_server_exceptions=False)
+    return TestClient(app, base_url="http://127.0.0.1:8812", raise_server_exceptions=False, headers=agent_headers(app))
 
 
 @pytest.fixture()

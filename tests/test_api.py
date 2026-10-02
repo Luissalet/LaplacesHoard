@@ -4,12 +4,13 @@ import pytest
 from fastapi.testclient import TestClient
 
 from laplaces_hoard.api import create_app
+from conftest import agent_headers
 
 
 @pytest.fixture()
 def client(data_dir: Path) -> TestClient:
     app = create_app(data_dir=data_dir, static_dir=None, port=8812)
-    return TestClient(app, base_url="http://127.0.0.1:8812")
+    return TestClient(app, base_url="http://127.0.0.1:8812", headers=agent_headers(app))
 
 
 def test_health_reports_service_slug(client: TestClient):
@@ -121,6 +122,7 @@ def test_host_header_guard_blocks_dns_rebinding(data_dir: Path):
     client = TestClient(app, base_url="http://evil.example.com")
     r = client.get("/api/health", headers={"Host": "evil.example.com"})
     assert r.status_code == 403
+    assert r.json() == {"error": "Only local access is allowed."}   # the shared guard's envelope
 
 
 def test_cross_origin_post_is_blocked(client: TestClient):
@@ -143,8 +145,11 @@ def test_sec_fetch_site_cross_site_is_blocked(client: TestClient):
 
 def test_plain_get_navigation_still_works_from_any_tab(client: TestClient):
     # GET must not be blocked by the origin/sec-fetch-site checks (only non-GET is).
-    r = client.get("/api/health", headers={"Sec-Fetch-Site": "cross-site"})
+    # Top-level navigation from another site keeps working; a cross-site subresource request (no `navigate` mode) does not.
+    r = client.get("/api/health", headers={"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "navigate"})
     assert r.status_code == 200
+    r = client.get("/api/health", headers={"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "no-cors"})
+    assert r.status_code == 403
 
 
 def test_stats_endpoint(client: TestClient):
