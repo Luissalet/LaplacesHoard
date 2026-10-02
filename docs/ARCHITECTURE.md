@@ -6,7 +6,7 @@
 frontend/ (React 19 + Vite, TypeScript)
         │  fetch, same-origin, POST /api/ui/<tool> and UI endpoints
         ▼
-laplaces_hoard/api.py   FastAPI app: browser-attack guard middleware,
+laplaces_hoard/api.py   FastAPI app: shared browser-attack guard (Hoard Link),
         │                /api/agent/<tool> (MCP adapter) and /api/ui/<tool> (web UI),
         │                work log, notebook cells, CSV export, static SPA
         ▼
@@ -180,14 +180,21 @@ to prefill a Chart builder under the answer and draw that chart at once.
 
 ## Browser-attack guard
 
-`security.BrowserGuardMiddleware` runs on every request:
+Hoard Link's `guard.install_guard` (vendored in `hoard_link/`, `strict_ports=True`) runs on every request:
 
 - **Host header** (all methods): only `127.0.0.1:<port>` or
-  `localhost:<port>`, which blocks DNS rebinding.
-- **Origin / `Sec-Fetch-Site`** (non-GET/HEAD/OPTIONS): a request whose
-  `Origin` names another origin, or whose `Sec-Fetch-Site` is
-  `cross-site`, is rejected. Plain GET navigation keeps working; there is
-  no CORS header anywhere.
+  `localhost:<port>` (plus the names in `LAPLACE_ALLOWED_HOSTS`, for a LAN
+  or a tailnet), which blocks DNS rebinding.
+- **Origin / `Sec-Fetch-Site`**: a request whose `Origin` names another
+  origin, or a cross-site request that is not a top-level navigation, is
+  rejected; so is a form post. Requests without Fetch Metadata (curl, the
+  MCP adapter) pass. There is no CORS header anywhere.
+- A refusal is `403 {"error": "<sentence>"}`.
+- **Tool authentication**: `POST /api/agent/<tool>` needs the bearer token
+  in `data/mcp-token` (the one `POST /api/agent/call` checks), which the MCP
+  adapter reads from `LAPLACE_TOKEN`, `LAPLACE_TOKEN_FILE` or
+  `<LAPLACE_DATA_DIR or the repo's data>/mcp-token`. The web UI's
+  `/api/ui/<tool>` stays open to the same-origin page.
 
 The SPA fallback only serves files that resolve inside `frontend/dist`
 (`/..%2f`, `//etc/passwd` and Windows `..\` all fall back to

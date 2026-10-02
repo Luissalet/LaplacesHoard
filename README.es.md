@@ -249,9 +249,11 @@ peticiones de red: los tipos de cambio y la descarga de festivos quedan
 fuera de alcance, y la instalación automática de extensiones de DuckDB está
 desactivada. Los datos se quedan en `data/` (ignorado por git) o donde
 indique `--data-dir`; registrar un archivo lo copia al catálogo local y
-nunca modifica el original. Un middleware rechaza el DNS rebinding
-(cabecera `Host` incorrecta) y las escrituras desde otros sitios (`Origin`
-ajeno o `Sec-Fetch-Site: cross-site`) en todas las rutas. Cada llamada a una
+nunca modifica el original. La guardia compartida de Hoard Link rechaza el DNS rebinding
+(cabecera `Host` incorrecta) y las peticiones desde otros sitios (`Origin`
+ajeno o `Sec-Fetch-Site: cross-site`) en todas las rutas, y las rutas
+`/api/agent/<herramienta>` del asistente exigen el token de
+`data/mcp-token` (el adaptador MCP lo envía). Cada llamada a una
 herramienta queda auditada en el registro con su origen (interfaz o
 asistente), entrada, salida, duración y estado, y "Actividad del
 asistente" muestra exactamente lo que ha ejecutado el modelo. Los scripts

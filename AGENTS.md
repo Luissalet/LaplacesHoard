@@ -38,7 +38,11 @@ Reglas para agentes de código que trabajen en este repositorio.
 - Toda herramienta vive en `POST /api/agent/<tool>` (adaptador MCP) y,
   con el mismo código, en `POST /api/ui/<tool>` (interfaz web). La interfaz
   nunca debe llamar a `/api/agent/*`: esas llamadas se registran como del
-  asistente y aparecen en "Actividad del asistente".
+  asistente y aparecen en "Actividad del asistente". Las rutas
+  `/api/agent/<herramienta>` exigen el token de `data/mcp-token` (lo envía el
+  adaptador MCP; lo lee de `LAPLACE_TOKEN`, `LAPLACE_TOKEN_FILE` o
+  `LAPLACE_DATA_DIR`). La guardia de peticiones, los tokens y la escritura
+  atómica vienen de Hoard Link (`hoard_link/`), no se reescriben aquí.
 - Los errores siempre son `{"error": "<código>", "message": "<texto>"}`,
   con un mensaje que diga qué cambiar.
 - Cada llamada debe quedar registrada en el work log (`db.log_computation`)

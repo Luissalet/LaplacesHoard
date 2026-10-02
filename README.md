@@ -221,9 +221,11 @@ The app binds `127.0.0.1` only and has no telemetry. It makes no network
 requests: exchange rates and holiday downloads are out of scope, and
 DuckDB extension auto-install is disabled. Data stays in `data/`
 (gitignored) or wherever `--data-dir` points; registering a file copies it
-into the local catalogue and never modifies the original. A middleware
-rejects DNS rebinding (wrong `Host`) and cross-site writes (foreign
-`Origin` or `Sec-Fetch-Site: cross-site`) on every route. Every tool call is
+into the local catalogue and never modifies the original. The shared Hoard Link
+guard rejects DNS rebinding (wrong `Host`) and cross-site requests (foreign
+`Origin` or `Sec-Fetch-Site: cross-site`) on every route, and the
+assistant's `/api/agent/<tool>` routes need the bearer token in
+`data/mcp-token` (the MCP adapter sends it). Every tool call is
 audited in the work log with its source (UI or assistant), input, output,
 duration and status, and "Assistant activity" shows exactly what the
 model ran. The Windows launch scripts were exercised with PowerShell 7 on
