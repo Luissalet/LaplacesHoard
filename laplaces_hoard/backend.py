@@ -18,6 +18,7 @@ from typing import Any, Mapping, Optional
 import httpx
 
 from .hoard_link import Link, LinkConfig
+from .hoard_link.atomic import write_text_atomic
 
 __all__ = [
     "USED_CAPABILITIES", "load_link", "config_error", "save_config", "saved_overrides", "token_set", "app_backends",
@@ -136,7 +137,8 @@ def save_config(
         else:
             raw.pop("capabilities", None)
 
-    _backend_path(data_dir).write_text(json.dumps(raw, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    # Atomic (temp file + rename, retried on Windows): a crash can never leave a truncated backend.json.
+    write_text_atomic(_backend_path(data_dir), json.dumps(raw, indent=2, ensure_ascii=False) + "\n")
 
 
 def saved_overrides(data_dir: Path) -> dict[str, Any]:

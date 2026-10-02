@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 from laplaces_hoard import backend as backend_mod
 from laplaces_hoard.api import create_app
+from conftest import agent_headers
 
 
 def offline_link_factory(data_dir: Path):
@@ -26,7 +27,7 @@ def offline_link_factory(data_dir: Path):
 @pytest.fixture()
 def client(data_dir: Path) -> TestClient:
     app = create_app(data_dir=data_dir, static_dir=None, port=8812, link_factory=offline_link_factory(data_dir))
-    return TestClient(app, base_url="http://127.0.0.1:8812")
+    return TestClient(app, base_url="http://127.0.0.1:8812", headers=agent_headers(app))
 
 
 def test_backend_status_reports_only_the_capabilities_the_app_uses(client: TestClient):
@@ -116,7 +117,7 @@ def test_backend_config_rejects_what_the_form_never_sends(client: TestClient, da
 def test_a_broken_backend_json_does_not_stop_the_app(data_dir: Path):
     (data_dir / "backend.json").write_text("{ not json", encoding="utf-8")
     app = create_app(data_dir=data_dir, static_dir=None, port=8812, link_factory=offline_link_factory(data_dir))
-    client = TestClient(app, base_url="http://127.0.0.1:8812")
+    client = TestClient(app, base_url="http://127.0.0.1:8812", headers=agent_headers(app))
     assert client.get("/api/health").status_code == 200
     body = client.get("/api/backend").json()
     assert "not valid JSON" in body["config"]["error"]

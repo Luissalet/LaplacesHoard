@@ -48,14 +48,18 @@ CREATE TABLE IF NOT EXISTS settings (
 
 _local = threading.local()
 _lock = threading.Lock()
+BUSY_TIMEOUT_S = 15.0
 
 
 def connect(data_dir: Path) -> sqlite3.Connection:
     """Open (or create) the app database with WAL mode and row access by name."""
     data_dir.mkdir(parents=True, exist_ok=True)
     db_path = data_dir / "app.sqlite"
-    conn = sqlite3.connect(db_path, check_same_thread=False)
+    # An explicit busy timeout: the work log is written by request threads, the notebook and the sandbox bookkeeping at
+    # once, and without one a brief lock became "database is locked" for the caller.
+    conn = sqlite3.connect(db_path, check_same_thread=False, timeout=BUSY_TIMEOUT_S)
     conn.row_factory = sqlite3.Row
+    conn.execute(f"PRAGMA busy_timeout={int(BUSY_TIMEOUT_S * 1000)}")
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     with _lock:
