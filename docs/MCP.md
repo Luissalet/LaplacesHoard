@@ -90,3 +90,7 @@ Every tool's docstring ends with a `Keywords:` line in English and Spanish
 (e.g. `calcular, cuánto es, porcentaje, IVA` for `calc`), because Faustus
 picks tools by retrieval over the descriptions and people often write to
 it in Spanish. `tests/test_mcp_protocol.py` checks that every tool has one.
+
+## Notebook and application context
+
+The complete catalogue now contains twenty tools. The original thirteen above retain their interfaces. notebook_cells, notebook_cell_get, computation_get and app_context are metadata reads and do not create new computation receipts. notebook_cell_create, notebook_cell_patch and notebook_cell_delete mutate the notebook through the same API used by the editor. Send only changed input/engine fields in a patch; later evaluation responses cannot replace newer content. See [API contracts](API.md) for arguments and concurrency behavior.

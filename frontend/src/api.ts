@@ -274,6 +274,10 @@ export const api = {
   agentCalls: (limit = 30) => get<{ items: LogItem[] }>(`/api/agent-calls?limit=${limit}`),
 
   cells: () => get<{ cells: Cell[] }>("/api/cells"),
+  appContext: (kind: string, object_id: string) =>
+    post<{ project: null; active_objects: { kind: string; object_id: string; title: string }[] }>("/api/ui/app_context", { kind, object_id }),
+  patchCell: (id: number, patch: { engine?: string; input?: string }) =>
+    post<Cell>("/api/ui/notebook_cell_patch", { id, patch }),
   createCell: (engine: string, input: string) => post<Cell>("/api/cells", { engine, input }),
   deleteCell: (id: number) => del<{ deleted: boolean }>(`/api/cells/${id}`),
 

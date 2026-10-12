@@ -22,6 +22,8 @@ export function CiteBadge({ id, onClick, title }: { id: string; onClick?: (id: s
   return (
     <button
       className="cite"
+      data-copilot-kind="computation"
+      data-copilot-id={id}
       title={title ?? "Copy citation"}
       onClick={() => {
         onClick?.(id);

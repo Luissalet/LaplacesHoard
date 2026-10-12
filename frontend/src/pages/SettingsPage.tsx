@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { MessageSquareText, RefreshCw } from "lucide-react";
-import { api, ApiError, type BackendStatus, type HealthInfo } from "../api";
+import { api, ApiError, type BackendStatus, type HealthInfo, type BackendConfigUpdate } from "../api";
+import { useCopilotRefresh } from "../copilot";
 import type { Lang } from "../i18n";
 import type { DictKey } from "../i18n";
 import type { Theme } from "../hooks";
@@ -15,6 +16,7 @@ export function SettingsPage({
   setTheme: (t: Theme) => void;
 }) {
   const [health, setHealth] = useState<HealthInfo | null>(null);
+  useCopilotRefresh(() => api.health().then(setHealth));
 
   useEffect(() => {
     api.health().then(setHealth).catch(() => {});
@@ -77,17 +79,21 @@ function ModelsPanel({ t }: { t: (k: DictKey) => string }) {
   const [capModel, setCapModel] = useState("");
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const dirty = useRef(new Set<string>());
+  const values = useRef({ faustusUrl, faustusToken, capUrl, capModel });
+  values.current = { faustusUrl, faustusToken, capUrl, capModel };
 
   const load = () =>
     api.backend().then((s) => {
       setStatus(s);
       setLoadError(null);
       // the form shows what is saved, so an override can be seen and cleared
-      setFaustusUrl(s.config.saved.faustus_url ?? "");
-      setCapUrl(s.config.saved.capabilities.llm?.url ?? "");
-      setCapModel(s.config.saved.capabilities.llm?.model ?? "");
+      if (!dirty.current.has("faustusUrl")) setFaustusUrl(s.config.saved.faustus_url ?? "");
+      if (!dirty.current.has("capUrl")) setCapUrl(s.config.saved.capabilities.llm?.url ?? "");
+      if (!dirty.current.has("capModel")) setCapModel(s.config.saved.capabilities.llm?.model ?? "");
       return s;
     }).catch((e) => setLoadError(e instanceof ApiError ? e.message : String(e)));
+  useCopilotRefresh(() => load());
 
   useEffect(() => {
     load();
@@ -109,12 +115,24 @@ function ModelsPanel({ t }: { t: (k: DictKey) => string }) {
     setSaved(false);
     try {
       // "" clears a saved override; an empty token box leaves the stored token alone
-      await api.backendConfig({
-        faustus_url: faustusUrl.trim(),
-        faustus_token: clearToken ? "" : faustusToken || undefined,
-        capabilities: { llm: { url: capUrl.trim(), model: capModel.trim() } },
-      });
-      setFaustusToken("");
+      const sent = { ...values.current };
+      const body: BackendConfigUpdate = {};
+      const fields: (keyof typeof sent)[] = [];
+      if (clearToken) {
+        body.faustus_token = "";
+      } else {
+        if (dirty.current.has("faustusUrl")) { body.faustus_url = sent.faustusUrl.trim(); fields.push("faustusUrl"); }
+        if (dirty.current.has("faustusToken") && sent.faustusToken) { body.faustus_token = sent.faustusToken; fields.push("faustusToken"); }
+        const capability: { url?: string; model?: string } = {};
+        if (dirty.current.has("capUrl")) { capability.url = sent.capUrl.trim(); fields.push("capUrl"); }
+        if (dirty.current.has("capModel")) { capability.model = sent.capModel.trim(); fields.push("capModel"); }
+        if (Object.keys(capability).length) body.capabilities = { llm: capability };
+      }
+      if (Object.keys(body).length) await api.backendConfig(body);
+      for (const field of fields) {
+        if (values.current[field] === sent[field]) dirty.current.delete(field);
+      }
+      if (body.faustus_token !== undefined && values.current.faustusToken === sent.faustusToken) setFaustusToken("");
       setSaved(true);
       await load();
     } catch (e) {
@@ -168,7 +186,8 @@ function ModelsPanel({ t }: { t: (k: DictKey) => string }) {
               <div className="faint" style={{ fontSize: 12 }}>{t("settings_models_override_hint")}</div>
               <div className="col">
                 <label className="field-label">{t("settings_models_faustus_url")}</label>
-                <input type="text" className="mono" value={faustusUrl} onChange={(e) => setFaustusUrl(e.target.value)} placeholder="http://127.0.0.1:7000" />
+                <input name="faustus_url" type="text" className="mono" value={faustusUrl}
+                  onChange={(e) => { dirty.current.add("faustusUrl"); setFaustusUrl(e.target.value); }} placeholder="http://127.0.0.1:7000" />
               </div>
               <div className="col">
                 <label className="field-label">
@@ -176,7 +195,8 @@ function ModelsPanel({ t }: { t: (k: DictKey) => string }) {
                   {status.config.token_set && <span className="faint"> ({t("settings_models_token_set")})</span>}
                 </label>
                 <div className="row" style={{ gap: 8 }}>
-                  <input type="password" className="mono grow" value={faustusToken} onChange={(e) => setFaustusToken(e.target.value)} placeholder="ody_..." />
+                  <input type="password" className="mono grow" value={faustusToken}
+                    onChange={(e) => { dirty.current.add("faustusToken"); setFaustusToken(e.target.value); }} placeholder="ody_..." />
                   {status.config.token_set && (
                     <button className="btn-ghost" disabled={busy} onClick={() => save(true)}>{t("settings_models_forget_token")}</button>
                   )}
@@ -185,11 +205,13 @@ function ModelsPanel({ t }: { t: (k: DictKey) => string }) {
               <div className="row">
                 <div className="col grow">
                   <label className="field-label">llm {t("settings_models_cap_url")}</label>
-                  <input type="text" className="mono" value={capUrl} onChange={(e) => setCapUrl(e.target.value)} placeholder="http://127.0.0.1:8081" style={{ width: "100%" }} />
+                  <input name="llm_url" type="text" className="mono" value={capUrl}
+                    onChange={(e) => { dirty.current.add("capUrl"); setCapUrl(e.target.value); }} placeholder="http://127.0.0.1:8081" style={{ width: "100%" }} />
                 </div>
                 <div className="col grow">
                   <label className="field-label">llm {t("settings_models_cap_model")}</label>
-                  <input type="text" value={capModel} onChange={(e) => setCapModel(e.target.value)} style={{ width: "100%" }} />
+                  <input name="llm_model" type="text" value={capModel}
+                    onChange={(e) => { dirty.current.add("capModel"); setCapModel(e.target.value); }} style={{ width: "100%" }} />
                 </div>
               </div>
               {error && <div className="faint" style={{ color: "var(--danger)" }}>{error}</div>}

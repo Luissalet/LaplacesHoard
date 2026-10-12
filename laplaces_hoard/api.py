@@ -41,6 +41,7 @@ from .engines.charts import ChartError
 from .hoard_link import Link
 from .hoard_link import family, tokens
 from .hoard_link.guard import install_guard
+from .hoard_link.copilot import install_copilot
 
 __version__ = "0.1.0"
 SERVICE_SLUG = "laplaces-hoard"
@@ -275,6 +276,33 @@ class CellBody(BaseModel):
     input: str
 
 
+class EmptyBody(BaseModel):
+    pass
+
+
+class ObjectBody(BaseModel):
+    id: str
+
+
+class CellIdBody(BaseModel):
+    id: int = Field(gt=0)
+
+
+class CellPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    engine: Optional[Literal["calc", "math", "units", "dates"]] = None
+    input: Optional[str] = None
+
+
+class CellPatchBody(CellIdBody):
+    patch: CellPatch
+
+
+class ContextBody(BaseModel):
+    kind: str = ""
+    object_id: str = ""
+
+
 class CapabilityOverride(BaseModel):
     # Only what the Settings form edits; "" clears a field. Anything else
     # (e.g. a `command` to run) is rejected rather than written to disk.
@@ -476,6 +504,65 @@ def create_app(
     def _mount_tools(prefix: str, source: str, dependencies: Optional[list] = None) -> None:
         def rec(engine: str, operation: str, input_data: Any, fn):
             return _record(engine, operation, input_data, source, fn)
+
+        @app.post(f"{prefix}/notebook_cells", name=f"{source}_notebook_cells", dependencies=dependencies)
+        def tool_notebook_cells(body: EmptyBody):
+            return {"cells": db.list_cells(state.conn)}
+
+        @app.post(f"{prefix}/notebook_cell_get", name=f"{source}_notebook_cell_get", dependencies=dependencies)
+        def tool_notebook_cell_get(body: CellIdBody):
+            return _cell_or_error(body.id)
+
+        @app.post(f"{prefix}/notebook_cell_create", name=f"{source}_notebook_cell_create", dependencies=dependencies)
+        def tool_notebook_cell_create(body: CellBody):
+            return rec("notebook", "create", body.model_dump(),
+                       lambda: _evaluate_cell(db.add_cell(state.conn, engine=body.engine, input_text=body.input), source))
+
+        @app.post(f"{prefix}/notebook_cell_patch", name=f"{source}_notebook_cell_patch", dependencies=dependencies)
+        def tool_notebook_cell_patch(body: CellPatchBody):
+            patch = body.patch.model_dump(exclude_unset=True, exclude_none=True)
+            def apply():
+                cell = db.patch_cell(state.conn, body.id, patch)
+                if cell is None:
+                    raise DataError("no such notebook cell; read notebook_cells for available ids")
+                return _evaluate_cell(cell, source) if patch else cell
+            return rec("notebook", "patch", body.model_dump(exclude_none=True), apply)
+
+        @app.post(f"{prefix}/notebook_cell_delete", name=f"{source}_notebook_cell_delete", dependencies=dependencies)
+        def tool_notebook_cell_delete(body: CellIdBody):
+            return rec("notebook", "delete", body.model_dump(),
+                       lambda: {"deleted": db.delete_cell(state.conn, body.id), "cell_id": body.id})
+
+        @app.post(f"{prefix}/computation_get", name=f"{source}_computation_get", dependencies=dependencies)
+        def tool_computation_get(body: ObjectBody):
+            def read():
+                item = db.get_computation(state.conn, body.id)
+                if item is None:
+                    raise HTTPException(404, detail={"error": "not_found", "message": "No such computation; read work_log for available ids."})
+                return item
+            return read()
+
+        @app.post(f"{prefix}/app_context", name=f"{source}_app_context", dependencies=dependencies)
+        def tool_app_context(body: ContextBody):
+            def resolve():
+                objects = []
+                if body.object_id:
+                    item = None
+                    if body.kind == "cell" and body.object_id.isdecimal():
+                        item = db.get_cell(state.conn, int(body.object_id))
+                    elif body.kind == "computation":
+                        item = db.get_computation(state.conn, body.object_id)
+                    elif body.kind == "dataset":
+                        item = next((d for d in state.catalog.list_datasets() if d["name"] == body.object_id), None)
+                    if item:
+                        reference_id = str(item["name"] if body.kind == "dataset" else item["id"])
+                        title = item.get("name") or item.get("input")
+                        if isinstance(title, dict):
+                            title = title.get("expression") or item.get("operation")
+                        objects.append({"kind": body.kind, "object_id": reference_id,
+                                        "title": str(title or reference_id)})
+                return {"project": None, "active_objects": objects}
+            return resolve()
 
         @app.post(f"{prefix}/calc", name=f"{source}_calc", dependencies=dependencies)
         def tool_calc(body: CalcBody):
@@ -789,21 +876,41 @@ def create_app(
             raise HTTPException(status_code=404, detail={"error": "not_found", "message": "no such cell"})
         return {"deleted": True}
 
-    def _run_cell(engine_name: str, text: str) -> dict:
+    def _cell_or_error(cell_id: int):
+        cell = db.get_cell(state.conn, cell_id)
+        if cell is None:
+            raise HTTPException(404, detail={"error": "not_found", "message": "No such cell; read notebook_cells for available ids."})
+        return cell
+
+    def _evaluate_cell(cell: dict, source: str):
+        try:
+            result = _run_cell(cell["engine"], cell["input"], source)
+        except _ENGINE_ERRORS as exc:
+            result = {"error": _error_code(exc), "message": str(exc)}
+        except HTTPException as exc:
+            result = exc.detail if isinstance(exc.detail, dict) else {"error": "cell_error", "message": str(exc.detail)}
+        except Exception as exc:
+            log.exception("notebook evaluation failed")
+            result = {"error": "internal_error", "message": f"{type(exc).__name__}: {exc}"}
+        return db.finish_cell(state.conn, cell, result) or {"cell_id": cell["id"], "deleted": True}
+
+    def _run_cell(engine_name: str, text: str, source: str = "ui") -> dict:
+        def record_cell(engine, operation, input_data, fn):
+            return _record(engine, operation, input_data, source, fn)
         if engine_name == "calc":
-            return ui("calc", "compute", {"expression": text}, lambda: _calc(text))
+            return record_cell("calc", "compute", {"expression": text}, lambda: _calc(text))
         if engine_name == "math":
             op, payload = symbolic.parse_cell(text)
-            return ui("math", op, {"operation": op, **payload}, lambda: symbolic.run(op, **payload))
+            return record_cell("math", op, {"operation": op, **payload}, lambda: symbolic.run(op, **payload))
         if engine_name == "units":
             for sep in ("->", "→", " to ", " en "):
                 if sep in text:
                     q, to = text.split(sep, 1)
-                    return ui("units", "convert", {"quantity": q.strip(), "to": to.strip()},
+                    return record_cell("units", "convert", {"quantity": q.strip(), "to": to.strip()},
                               lambda: _units("convert", quantity=q.strip(), to=to.strip()))
-            return ui("units", "check", {"expression": text}, lambda: _units("check", expression=text))
+            return record_cell("units", "check", {"expression": text}, lambda: _units("check", expression=text))
         if engine_name == "dates":
-            return ui("dates", "parse", {"text": text}, lambda: dates.parse(text))
+            return record_cell("dates", "parse", {"text": text}, lambda: dates.parse(text))
         raise HTTPException(status_code=400, detail={"error": "unknown_engine", "message": f"unknown cell engine {engine_name}"})
 
     def _dispatch_date(body: "DateCalcBody") -> dict:
@@ -891,5 +998,7 @@ def create_app(
     # so the two catalogues never disagree.
     family.install_fastapi(app, "laplace", str(data_dir),
                            mcp_source=str(Path(__file__).with_name("mcp_server.py")))
+    install_copilot(app, "laplace", data_dir, app_name=DISPLAY_NAME,
+                    config_path=None if backend_mod.config_error(data_dir) else data_dir / backend_mod.BACKEND_FILE)
 
     return app

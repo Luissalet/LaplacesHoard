@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, ApiError, type DatasetSummary, type StatsResult } from "../api";
 import type { DictKey } from "../i18n";
+import { useCopilotRefresh } from "../copilot";
 import { CiteBadge, ErrorBlock, Headline, KeyValues, copyCite, fmtNum } from "../components/ResultView";
 
 type T = (k: DictKey) => string;
@@ -45,6 +46,7 @@ export function StatisticsPage({ t }: { t: T }) {
   const [result, setResult] = useState<StatsResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  useCopilotRefresh(() => api.datasets().then(r => setDatasets(r.datasets)));
 
   useEffect(() => {
     api.datasets().then((r) => setDatasets(r.datasets)).catch(() => {});

@@ -3,6 +3,7 @@ import {
   Sigma, Database, Ruler, BarChart3, ScrollText, Bot, Settings as SettingsIcon, Menu,
 } from "lucide-react";
 import { useLang, useTheme } from "./hooks";
+import { useCopilotContext } from "./copilot";
 import type { DictKey } from "./i18n";
 import { NotebookPage } from "./pages/NotebookPage";
 import { DataPage } from "./pages/DataPage";
@@ -29,6 +30,7 @@ export default function App() {
   const [theme, setTheme] = useTheme();
   const [tab, setTab] = useState<Tab>("notebook");
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  useCopilotContext(tab, lang, theme);
 
   const activeLabel = t(NAV.find((n) => n.id === tab)!.labelKey);
 

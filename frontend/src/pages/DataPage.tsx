@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { BarChart3, Database, Download, Play, Plus, Sparkles, Table2 } from "lucide-react";
 import { api, ApiError, type AskResult, type ColumnProfile, type DatasetDetail, type DatasetSummary, type QueryResult } from "../api";
 import { detectLang, type DictKey } from "../i18n";
+import { useCopilotRefresh } from "../copilot";
 import { CiteBadge, ErrorBlock, copyCite, fmtDecimalText, fmtNum } from "../components/ResultView";
 
 type T = (k: DictKey) => string;
@@ -21,6 +22,11 @@ export function DataPage({ t }: { t: T }) {
       setLoaded(true);
       return r.datasets;
     });
+  useCopilotRefresh(async () => {
+    const list = await refresh();
+    if (selected && list.some(d => d.name === selected)) api.datasetDetail(selected).then(setDetail);
+    else if (selected) { setSelected(null); setDetail(null); }
+  });
 
   useEffect(() => {
     refresh().then((list) => {
@@ -34,7 +40,7 @@ export function DataPage({ t }: { t: T }) {
   }, [selected]);
 
   return (
-    <div className="stack">
+    <div className="stack" data-copilot-primary data-copilot-kind="dataset" data-copilot-id={selected || undefined}>
       <AskPanel t={t} datasets={datasets} />
       <div className="two-col">
       <div className="card">
@@ -251,7 +257,7 @@ function AddDataset({ t, onDone }: { t: T; onDone: (name?: string) => void }) {
   }
 
   return (
-    <div className="stack" style={{ marginBottom: 14 }}>
+    <div className="stack" data-copilot-editor data-copilot-new style={{ marginBottom: 14 }}>
       <div className="col">
         <label className="field-label">{t("data_path")}</label>
         <input type="text" className="mono" value={path} onChange={(e) => setPath(e.target.value)} placeholder="C:\Users\...\ventas.xlsx" />

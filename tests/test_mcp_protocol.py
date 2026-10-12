@@ -46,12 +46,26 @@ async def test_mcp_lists_all_tools_and_calls_calc_and_data_query(live_app):
                 assert "Keywords:" in description, tool.name
                 assert tool.annotations is not None, tool.name
                 assert tool.annotations.openWorldHint is False, tool.name
-                assert tool.annotations.readOnlyHint is (tool.name not in {"data_register", "data_report", "report_rerun"}), tool.name
+                assert tool.annotations.readOnlyHint is (tool.name not in {
+                    "data_register", "data_report", "report_rerun",
+                    "notebook_cell_create", "notebook_cell_patch", "notebook_cell_delete",
+                }), tool.name
 
             calc_result = await session.call_tool("calc", {"expression": "0.1 + 0.2"})
             assert not calc_result.isError
             text = calc_result.content[0].text
             assert '"exact":"3/10"' in text.replace(" ", "") or "3/10" in text
+
+            cell = await session.call_tool("notebook_cell_create", {"engine": "calc", "input": "3+4"})
+            assert not cell.isError
+            cell_id = json.loads(cell.content[0].text)["id"]
+            patched = await session.call_tool("notebook_cell_patch", {"id": cell_id, "patch": {"input": "8+9"}})
+            assert not patched.isError
+            assert json.loads(patched.content[0].text)["result"]["exact"] == "17"
+            read = await session.call_tool("notebook_cell_get", {"id": cell_id})
+            assert not read.isError and json.loads(read.content[0].text)["input"] == "8+9"
+            context = await session.call_tool("app_context", {"kind": "cell", "object_id": str(cell_id)})
+            assert json.loads(context.content[0].text)["active_objects"][0]["object_id"] == str(cell_id)
 
             reg_result = await session.call_tool(
                 "data_register",

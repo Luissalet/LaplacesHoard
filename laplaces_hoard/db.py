@@ -222,6 +222,39 @@ def list_cells(conn: sqlite3.Connection) -> list[dict]:
     return out
 
 
+def get_cell(conn: sqlite3.Connection, cell_id: int) -> Optional[dict]:
+    with _lock:
+        row = conn.execute("SELECT * FROM cells WHERE id = ?", (cell_id,)).fetchone()
+    if row is None:
+        return None
+    cell = dict(row)
+    cell["result"] = json.loads(cell.pop("result_json")) if cell.get("result_json") else None
+    cell.pop("result_json", None)
+    return cell
+
+
+def patch_cell(conn: sqlite3.Connection, cell_id: int, patch: dict) -> Optional[dict]:
+    """Update supplied fields in one SQL statement, preserving other writers' fields."""
+    fields = {key: value for key, value in patch.items() if key in ("engine", "input")}
+    if not fields:
+        return get_cell(conn, cell_id)
+    with _lock:
+        assignments = ", ".join(key + " = ?" for key in fields)
+        conn.execute("UPDATE cells SET " + assignments + ", result_json = NULL, updated_at = ? WHERE id = ?",
+                     [*fields.values(), _now(), cell_id])
+        conn.commit()
+    return get_cell(conn, cell_id)
+
+
+def finish_cell(conn: sqlite3.Connection, cell: dict, result: Any) -> Optional[dict]:
+    """A slow evaluation cannot replace the result of a later cell edit."""
+    with _lock:
+        conn.execute("UPDATE cells SET result_json = ?, updated_at = ? WHERE id = ? AND engine = ? AND input = ?",
+                     (json.dumps(result, default=str), _now(), cell["id"], cell["engine"], cell["input"]))
+        conn.commit()
+    return get_cell(conn, cell["id"])
+
+
 def add_cell(conn: sqlite3.Connection, *, engine: str, input_text: str) -> dict:
     with _lock:
         pos_row = conn.execute("SELECT COALESCE(MAX(position), -1) + 1 AS p FROM cells").fetchone()
