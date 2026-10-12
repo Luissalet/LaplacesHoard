@@ -9,3 +9,5 @@ def test_manifest_is_valid_and_referenced_files_exist():
     data = check_repo(REPO_ROOT)
     assert data["id"] == "laplace"
     assert data["mcp"]["transport"] == "stdio"
+    assert data["x-family"]["copilot"]["contract_version"] == "1.0"
+    assert data["x-family"]["copilot"]["object_types"] == ["cell", "computation", "dataset"]

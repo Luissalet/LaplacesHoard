@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { BarChart3, RotateCw, Search, X } from "lucide-react";
 import { api, type LogItem } from "../api";
 import type { DictKey } from "../i18n";
+import { useCopilotRefresh } from "../copilot";
 import { CiteBadge, copyCite } from "../components/ResultView";
 
 const ENGINES = ["calc", "math", "units", "stats", "dates", "data", "report", "log"];
@@ -15,6 +16,7 @@ export function WorkLogPage({ t }: { t: (k: DictKey) => string }) {
 
   const load = (q = query) =>
     api.log({ limit: 50, engine: engine || undefined, source: source || undefined, query: q || undefined }).then((r) => setItems(r.items));
+  useCopilotRefresh(() => load());
 
   useEffect(() => {
     load();
@@ -75,7 +77,8 @@ export function WorkLogPage({ t }: { t: (k: DictKey) => string }) {
               </thead>
               <tbody>
                 {items.map((it) => (
-                  <tr key={it.id} style={{ cursor: "pointer" }} onClick={() => setSelected(it)}>
+                  <tr key={it.id} data-copilot-kind="computation" data-copilot-id={it.id}
+                    style={{ cursor: "pointer" }} onClick={() => setSelected(it)}>
                     <td className="mono">{it.id}</td>
                     <td>{it.engine}</td>
                     <td className="mono">

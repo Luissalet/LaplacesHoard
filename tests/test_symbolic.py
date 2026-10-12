@@ -43,13 +43,18 @@ def test_matrix_determinant_and_multiply():
 def test_worker_timeout_then_recovers():
     """The generic worker: kills a hung call and starts a fresh process for the next one."""
     worker = TimeoutWorker(_slow_or_fast, timeout=1)
-    start = time.time()
-    with pytest.raises(WorkerTimeout):
-        worker.run("slow", {})
-    assert time.time() - start < 3
-    # self-healed: a normal call right after must still work
-    assert worker.run("fast", {}) == {"ok": True, "fast": True}
-    worker.shutdown()
+    try:
+        # Imports under Windows spawn are startup, explicitly outside the
+        # per-call timeout. The app likewise warms its worker before use.
+        worker.warm_up()
+        start = time.time()
+        with pytest.raises(WorkerTimeout):
+            worker.run("slow", {})
+        assert time.time() - start < 3
+        # self-healed: a normal call right after must still work
+        assert worker.run("fast", {}) == {"ok": True, "fast": True}
+    finally:
+        worker.shutdown()
 
 
 def _always_slow(op, payload):

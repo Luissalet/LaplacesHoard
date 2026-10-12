@@ -57,12 +57,14 @@ def _raw_get(port: int, path: str) -> tuple[int, bytes]:
 def test_spa_fallback_never_serves_files_outside_the_frontend(static_server, path):
     status, body = _raw_get(static_server, path)
     assert b"SECRET" not in body
-    assert status == 200 and body == b"INDEX"
+    assert status == 200 and body.startswith(b"INDEX")
+    assert body.count(b"/api/copilot/launcher.js") == 1
 
 
 def test_spa_still_serves_its_own_files(static_server):
     assert _raw_get(static_server, "/favicon.svg") == (200, b"<svg/>")
-    assert _raw_get(static_server, "/data")[1] == b"INDEX"
+    assert _raw_get(static_server, "/data")[1].startswith(b"INDEX")
+    assert _raw_get(static_server, "/data")[1].count(b"/api/copilot/launcher.js") == 1
     status, body = _raw_get(static_server, "/api/nope")
     assert status == 404 and b"not_found" in body
 

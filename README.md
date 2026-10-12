@@ -255,3 +255,11 @@ list of open items and how each one was found.
 ## License
 
 MIT - see [LICENSE](LICENSE).
+
+## Contextual assistant
+
+The Faustus button opens the shared conversation panel on every main view. It receives the selected notebook cell, saved calculation or dataset and the current unsaved form fields. New forms and removed objects keep their drafts without inventing references. Chats, drafts and turns remain in Faustus; Laplace keeps its numerical engines and data. The existing Ask your data workflow is preserved.
+
+Notebook cells can now be read, created, edited partially and deleted over the normal API and MCP. Edit cell submits only changed fields, preserving changes to other fields made meanwhile. Refreshed lists retain open editors; removed cells keep their pending text with an explicit message. Settings also save only changed fields. The native tool catalogue contains all thirteen previous tools plus seven notebook/context operations. See [API and concurrency behavior](docs/API.md).
+
+Boundary: the panel requires the configured Faustus service. Scripted browser/MCP checks demonstrate the integration and native effects; they do not grade the global model's autonomous quality.

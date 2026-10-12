@@ -27,7 +27,7 @@ def anonymous(app):
 
 def test_agent_tool_routes_refuse_a_missing_or_wrong_token(anonymous):
     tools = [t["name"] for t in anonymous.get("/api/agent/tools").json()["tools"]]
-    assert len(tools) == 13
+    assert len(tools) == 20
     for name in tools:
         r = anonymous.post(f"/api/agent/{name}", json={})
         assert r.status_code == 401, name

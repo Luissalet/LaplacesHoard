@@ -17,7 +17,7 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Any, Literal, Optional, Union
 from urllib.parse import urlparse
 
 import httpx
@@ -92,6 +92,74 @@ _UNAVAILABLE = (
     f"Start it from Faustus (Apps) or with 'Iniciar Laplace's Hoard.cmd', then retry."
 )
 _RO = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False)
+_WRITE = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False)
+_DELETE = ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=False)
+
+
+@mcp.tool(annotations=_RO)
+def notebook_cells() -> dict:
+    """Read the real notebook cells and their ids, inputs and results.
+
+    Keywords: notebook, cells, list, cuaderno, celdas, listar.
+    """
+    return _call("notebook_cells", {})
+
+
+@mcp.tool(annotations=_RO)
+def notebook_cell_get(id: int) -> dict:
+    """Read one notebook cell by its existing id before editing it.
+
+    Keywords: notebook, cell, read, cuaderno, celda, leer.
+    """
+    return _call("notebook_cell_get", {"id": id})
+
+
+@mcp.tool(annotations=_WRITE)
+def notebook_cell_create(engine: Literal["calc", "math", "units", "dates"], input: str) -> dict:
+    """Add and evaluate a notebook cell with a native calculation engine.
+
+    Keywords: notebook, cell, add, calculate, cuaderno, celda, añadir, calcular.
+    """
+    return _call("notebook_cell_create", {"engine": engine, "input": input})
+
+
+@mcp.tool(annotations=_WRITE)
+def notebook_cell_patch(id: int, patch: dict[str, Any]) -> dict:
+    """Edit only supplied input/engine fields of a notebook cell and evaluate its current content.
+
+    Other fields and other cells are preserved. Read the cell first; send only the fields you intend to change.
+    Keywords: notebook, cell, edit, update, partial, cuaderno, celda, editar, cambiar, parcial.
+    """
+    return _call("notebook_cell_patch", {"id": id, "patch": patch})
+
+
+@mcp.tool(annotations=_DELETE)
+def notebook_cell_delete(id: int) -> dict:
+    """Remove the notebook cell identified by id, leaving all other cells intact.
+
+    Keywords: notebook, cell, delete, remove, cuaderno, celda, borrar, quitar.
+    """
+    return _call("notebook_cell_delete", {"id": id})
+
+
+@mcp.tool(annotations=_RO)
+def computation_get(id: str) -> dict:
+    """Read the saved input and result of one cited computation (L-...) without running it again.
+
+    Keywords: computation, result, citation, read, cálculo, resultado, cita, leer.
+    """
+    return _call("computation_get", {"id": id})
+
+
+@mcp.tool(annotations=_RO)
+def app_context(kind: str = "", object_id: str = "") -> dict:
+    """Resolve a real cell, computation or dataset reference for the Laplace copilot.
+
+    Missing ids and new forms return no active object and never start a calculation.
+    Laplace has one notebook and no domain projects.
+    Keywords: context, object, reference, contexto, objeto, referencia.
+    """
+    return _call("app_context", {"kind": kind, "object_id": object_id})
 
 
 def _call(tool: str, payload: dict[str, Any]) -> dict[str, Any]:

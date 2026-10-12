@@ -286,3 +286,11 @@ El listado completo de asuntos abiertos y cómo se encontraron está en
 ## Licencia
 
 MIT - ver [LICENSE](LICENSE).
+
+## Asistente contextual
+
+El botón Faustus abre el panel común de conversaciones en todas las vistas principales. Recibe la celda, cálculo guardado o dataset seleccionados y los campos del formulario pendientes de guardar. Las altas y los objetos retirados conservan el borrador sin inventar referencias. Faustus guarda chats, borradores y turnos; Laplace conserva sus motores numéricos y datos. Pregunta a tus datos sigue disponible.
+
+Las celdas del cuaderno se pueden leer, crear, editar parcialmente y retirar por la API y MCP normales. Editar celda guarda sólo los campos modificados y conserva los cambios que se hicieron entretanto en los demás. El refresco mantiene los editores abiertos; una celda retirada conserva el texto pendiente con un mensaje explícito. Ajustes también guarda sólo los campos modificados. El catálogo conserva las trece herramientas anteriores y añade siete operaciones de cuaderno y contexto. Véase [API y comportamiento concurrente](docs/API.md).
+
+Límite: el panel necesita el servicio Faustus configurado. Las pruebas de navegador y MCP con proveedor simulado acreditan la integración y sus efectos nativos; no evalúan la autonomía del modelo global.

@@ -18,7 +18,7 @@ from typing import Any, Mapping, Optional
 import httpx
 
 from .hoard_link import Link, LinkConfig
-from .hoard_link.atomic import write_text_atomic
+from .hoard_link.atomic import write_text_atomic, update_json
 
 __all__ = [
     "USED_CAPABILITIES", "load_link", "config_error", "save_config", "saved_overrides", "token_set", "app_backends",
@@ -97,7 +97,14 @@ def save_config(
     """
     data_dir = Path(data_dir)
     data_dir.mkdir(parents=True, exist_ok=True)
-    raw = _read_raw(data_dir)
+    def merge(raw):
+        raw = dict(raw) if isinstance(raw, dict) else {}
+        return _merge_config(raw, faustus_url=faustus_url, faustus_token=faustus_token,
+                             only_resident=only_resident, capabilities=capabilities)
+    update_json(_backend_path(data_dir), merge, default={})
+
+
+def _merge_config(raw, *, faustus_url, faustus_token, only_resident, capabilities):
 
     if only_resident is not None:
         raw["only_resident"] = bool(only_resident)
@@ -138,7 +145,7 @@ def save_config(
             raw.pop("capabilities", None)
 
     # Atomic (temp file + rename, retried on Windows): a crash can never leave a truncated backend.json.
-    write_text_atomic(_backend_path(data_dir), json.dumps(raw, indent=2, ensure_ascii=False) + "\n")
+    return raw
 
 
 def saved_overrides(data_dir: Path) -> dict[str, Any]:

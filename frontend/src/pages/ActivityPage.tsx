@@ -2,10 +2,12 @@ import { useEffect, useState } from "react";
 import { Bot } from "lucide-react";
 import { api, type LogItem } from "../api";
 import type { DictKey } from "../i18n";
+import { useCopilotRefresh } from "../copilot";
 import { CiteBadge, copyCite } from "../components/ResultView";
 
 export function ActivityPage({ t }: { t: (k: DictKey) => string }) {
   const [items, setItems] = useState<LogItem[]>([]);
+  useCopilotRefresh(() => api.agentCalls(50).then(r => setItems(r.items)));
 
   useEffect(() => {
     api.agentCalls(50).then((r) => setItems(r.items));

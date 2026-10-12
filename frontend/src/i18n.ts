@@ -12,6 +12,11 @@ export function detectLang(): Lang {
 
 export const dict = {
   en: {
+    cell_edit: "Edit cell",
+    cell_engine: "Cell engine",
+    cell_input: "Cell input",
+    cell_save: "Save changes",
+    cell_unavailable: "This cell was removed. Your unsaved text remains here; copy it or add it as a new cell.",
     appName: "Laplace's Hoard",
     tagline: "Exact numbers for language models",
     nav_notebook: "Notebook",
@@ -215,6 +220,11 @@ export const dict = {
     ask_empty: "Ask a question in plain English or Spanish; the model writes the SQL, you can read and re-run it.",
   },
   es: {
+    cell_edit: "Editar celda",
+    cell_engine: "Motor de la celda",
+    cell_input: "Contenido de la celda",
+    cell_save: "Guardar cambios",
+    cell_unavailable: "Esta celda se ha retirado. El texto pendiente sigue aquí; cópialo o añádelo como una celda nueva.",
     appName: "Laplace's Hoard",
     tagline: "Números exactos para modelos de lenguaje",
     nav_notebook: "Cuaderno",

@@ -1,6 +1,7 @@
-import { useEffect, useState, type ReactNode } from "react";
-import { Play } from "lucide-react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { Pencil, Play } from "lucide-react";
 import { api, ApiError, type Cell } from "../api";
+import { useCopilotRefresh } from "../copilot";
 import type { DictKey } from "../i18n";
 import { CiteBadge, ConfirmDelete, ErrorBlock, Latex, VerifiedBadge, copyCite, fmtNum } from "../components/ResultView";
 
@@ -16,13 +17,22 @@ const PLACEHOLDER_KEY: Record<Engine, DictKey> = {
 
 type T = (k: DictKey) => string;
 
+type VisibleCell = Cell & { unavailable?: boolean };
+
 export function NotebookPage({ t }: { t: T }) {
-  const [cells, setCells] = useState<Cell[]>([]);
+  const [cells, setCells] = useState<VisibleCell[]>([]);
+  const editingIds = useRef(new Set<number>());
   const [engine, setEngine] = useState<Engine>("calc");
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
+  const refreshCells = () => api.cells().then(r => {
+    const ids = new Set(r.cells.map(cell => cell.id));
+    setCells(previous => [...r.cells, ...previous.filter(cell => !ids.has(cell.id) && editingIds.current.has(cell.id))
+      .map(cell => ({ ...cell, unavailable: true }))]);
+  });
+  useCopilotRefresh(refreshCells);
 
   useEffect(() => {
     api.cells().then((r) => {
@@ -39,9 +49,10 @@ export function NotebookPage({ t }: { t: T }) {
       // the backend always answers 200 with an error-shaped result for a
       // bad expression; a thrown error here means the request itself
       // failed (network, or a genuine server bug) and must still be shown
-      const cell = await api.createCell(engine, input.trim());
-      setCells((c) => [...c, cell]);
-      setInput("");
+      const sentInput = input.trim();
+      await api.createCell(engine, sentInput);
+      await refreshCells();
+      setInput(value => value.trim() === sentInput ? "" : value);
     } catch (e) {
       setAddError(e instanceof ApiError ? e.message : String(e));
     } finally {
@@ -50,6 +61,7 @@ export function NotebookPage({ t }: { t: T }) {
   }
 
   async function removeCell(id: number) {
+    editingIds.current.delete(id);
     setCells((c) => c.filter((x) => x.id !== id));
     try {
       await api.deleteCell(id);
@@ -60,7 +72,7 @@ export function NotebookPage({ t }: { t: T }) {
 
   return (
     <div>
-      <div className="card">
+      <div className="card" data-copilot-editor data-copilot-new data-copilot-engine={engine}>
         <div className="row" style={{ marginBottom: 10, justifyContent: "space-between" }}>
           <div className="pill-select">
             {ENGINES.map((e) => (
@@ -74,6 +86,7 @@ export function NotebookPage({ t }: { t: T }) {
         <div className="row">
           <input
             type="text"
+            name="input"
             className="grow mono"
             placeholder={t(PLACEHOLDER_KEY[engine])}
             value={input}
@@ -91,28 +104,83 @@ export function NotebookPage({ t }: { t: T }) {
       <div style={{ marginTop: 16 }}>
         {loaded && cells.length === 0 && <div className="empty-state">{t("notebook_empty")}</div>}
         {[...cells].reverse().map((cell) => (
-          <CellCard key={cell.id} cell={cell} onDelete={removeCell} t={t} />
+          <CellCard key={cell.id} cell={cell} onDelete={removeCell}
+            onUpdated={refreshCells} onEditingChange={editing => {
+              if (editing) editingIds.current.add(cell.id);
+              else { editingIds.current.delete(cell.id); if (cell.unavailable) refreshCells(); }
+            }} t={t} />
         ))}
       </div>
     </div>
   );
 }
 
-function CellCard({ cell, onDelete, t }: { cell: Cell; onDelete: (id: number) => void; t: T }) {
+function CellCard({ cell, onDelete, onUpdated, onEditingChange, t }: {
+  cell: VisibleCell; onDelete: (id: number) => void; onUpdated: () => unknown;
+  onEditingChange: (editing: boolean) => void; t: T;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [engine, setEngine] = useState(cell.engine);
+  const [input, setInput] = useState(cell.input);
+  const [saving, setSaving] = useState(false);
+  const [editError, setEditError] = useState("");
+  const baseline = useRef({ engine: cell.engine, input: cell.input });
+  useEffect(() => {
+    const previous = baseline.current;
+    setEngine(value => value === previous.engine ? cell.engine : value);
+    setInput(value => value === previous.input ? cell.input : value);
+    baseline.current = { engine: cell.engine, input: cell.input };
+  }, [cell.engine, cell.input]);
+  async function save() {
+    const patch: { engine?: string; input?: string } = {};
+    if (engine !== baseline.current.engine) patch.engine = engine;
+    if (input !== baseline.current.input) patch.input = input;
+    setSaving(true);
+    setEditError("");
+    try {
+      if (Object.keys(patch).length) await api.patchCell(cell.id, patch);
+      await onUpdated();
+      setEditing(false);
+      onEditingChange(false);
+    } catch (error) {
+      setEditError(error instanceof Error ? error.message : String(error));
+    } finally { setSaving(false); }
+  }
   const result = cell.result as Record<string, unknown> | null;
   const isError = result && "error" in result && "message" in result;
   return (
-    <div className="cell">
+    <div className="cell" data-copilot-kind="cell" data-copilot-id={String(cell.id)}>
       <div className="cell-header">
         <div className="row">
           <span className="badge badge-muted">{cell.engine}</span>
           <code>{cell.input}</code>
         </div>
         <div className="row" style={{ gap: 4 }}>
+          <button className="icon-btn" aria-label={t("cell_edit")} onClick={() => {
+            setEditing(true); onEditingChange(true);
+          }}>
+            <Pencil size={14} />
+          </button>
           {result && typeof result.id === "string" && <CiteBadge id={result.id} onClick={copyCite} title={t("common_copy_cite")} />}
           <ConfirmDelete onConfirm={() => onDelete(cell.id)} label={t("common_delete")} confirmLabel={t("common_confirm_delete")} />
         </div>
       </div>
+      {editing && <div className="stack" data-copilot-editor data-copilot-engine={engine}>
+        {cell.unavailable && <ErrorBlock message={t("cell_unavailable")} />}
+        <select aria-label={t("cell_engine")} name="engine" disabled={saving}
+          value={engine} onChange={event => setEngine(event.target.value)}>
+          {ENGINES.map(value => <option key={value} value={value}>{value}</option>)}
+        </select>
+        <input aria-label={t("cell_input")} name="input" className="mono" disabled={saving}
+          value={input} onChange={event => setInput(event.target.value)} />
+        <div className="row">
+          <button className="btn" disabled={saving} onClick={save}>{t("cell_save")}</button>
+          <button className="btn-ghost" disabled={saving} onClick={() => {
+            setEditing(false); onEditingChange(false); setEngine(cell.engine); setInput(cell.input); setEditError("");
+          }}>{t("common_cancel")}</button>
+        </div>
+        {editError && <ErrorBlock message={editError} />}
+      </div>}
       {result && isError && <ErrorBlock message={String((result as { message?: string }).message ?? "error")} />}
       {result && !isError && <CellResult result={result} t={t} />}
       {!result && <ErrorBlock message={t("notebook_no_result")} />}
