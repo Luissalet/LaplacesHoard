@@ -57,14 +57,13 @@ export function useCopilotContext(section: string, lang: Lang, theme: Theme) {
     document.addEventListener("pointerdown", remember);
     const hook: ContextHook = {
       context: async () => {
+        const view = { ...current.current };
         const root = document.querySelector<HTMLElement>(".content");
         const primary = root?.querySelector<HTMLElement>("[data-copilot-primary]");
         const group = editor.current?.isConnected ? editor.current
           : root?.querySelector<HTMLElement>("[data-copilot-editor], .card");
         const reference = group?.hasAttribute("data-copilot-new") ? null : selected.current || (primary?.dataset.copilotId
           ? { kind: primary.dataset.copilotKind!, object_id: primary.dataset.copilotId } : null);
-        const resolved = reference ? await api.appContext(reference.kind, reference.object_id)
-          : { project: null, active_objects: [] };
         const fields = [...(group?.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>("input, textarea, select") || [])]
           .filter(field => field.type !== "password" && field.type !== "hidden" && field.getClientRects().length)
           .map((field, index) => ({
@@ -74,10 +73,15 @@ export function useCopilotContext(section: string, lang: Lang, theme: Theme) {
             value: field instanceof HTMLInputElement && ["checkbox", "radio"].includes(field.type) ? field.checked : field.value,
           }));
         const text = String(window.getSelection() || "").trim();
+        const engine = group?.dataset.copilotEngine;
+        // Resolve the saved object against the same form snapshot captured above.
+        // Navigation or typing during this request belongs to the next request.
+        const resolved = reference ? await api.appContext(reference.kind, reference.object_id)
+          : { project: null, active_objects: [] };
         return { ...resolved,
-          view: { section: current.current.section, locale: current.current.lang,
-            editor: { kind: current.current.section, object_id: resolved.active_objects[0]?.object_id || null,
-              engine: group?.dataset.copilotEngine, fields } },
+          view: { section: view.section, locale: view.lang,
+            editor: { kind: view.section, object_id: resolved.active_objects[0]?.object_id || null,
+              engine, fields } },
           selection: text ? { kind: "text", text } : null };
       },
       onTurnEnd: () => window.dispatchEvent(new CustomEvent("laplace:copilot-refresh")),
