@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "id": "laplace",
-  "name": "Laplace's Hoard",
-  "purpose": "Gives the model exact arithmetic, symbolic math, unit conversion, statistics, date arithmetic and read-only SQL over local files, with every computation logged and citable.",
+  "name": "Laplace's Hoard · Nightingale",
+  "purpose": "Absorbed by Nightingale's Hoard. Compatibility identity only; no standalone server. Gives the model exact arithmetic, symbolic math, unit conversion, statistics, date arithmetic and read-only SQL over local files, with every computation logged and citable.",
   "capabilities": [
     "arithmetic",
     "symbolic-math",
@@ -16,15 +16,16 @@
     "APP_URL"
   ],
   "defaults": {
-    "APP_URL": "http://127.0.0.1:8812"
+    "APP_URL": "http://127.0.0.1:5189/calculation",
+    "NIGHTINGALE_DIR": "{LAPLACE_DIR}/../Nightingale's Hoard"
   },
   "app": {
-    "url_default": "http://127.0.0.1:8812",
-    "ui_url": "{APP_URL}",
+    "url_default": "http://127.0.0.1:5189/calculation",
+    "ui_url": "http://127.0.0.1:5189/",
     "health": {
       "path": "/api/health",
       "expect": {
-        "service": "laplaces-hoard"
+        "service": "absorbed-laplace"
       }
     },
     "identify": {
@@ -34,32 +35,21 @@
       "title": [
         "laplace's hoard"
       ]
-    },
-    "launch_hint": {
-      "kind": "process",
-      "executable": "{LAPLACE_DIR}/.venv/Scripts/python.exe",
-      "argv": [
-        "-m",
-        "laplaces_hoard",
-        "--no-browser"
-      ],
-      "cwd": "{LAPLACE_DIR}",
-      "readiness": {
-        "url": "{APP_URL}/api/health",
-        "timeout_s": 30
-      }
     }
   },
   "mcp": {
     "transport": "stdio",
-    "command": "{LAPLACE_DIR}/.venv/Scripts/python.exe",
+    "command": "{NIGHTINGALE_DIR}/venv/Scripts/python.exe",
     "args": [
-      "{LAPLACE_DIR}/laplaces_hoard/mcp_server.py"
+      "{NIGHTINGALE_DIR}/mcp_server.py"
     ],
     "env": {
-      "LAPLACE_URL": "{APP_URL}"
+      "NIGHTINGALE_URL": "http://127.0.0.1:5189",
+      "NIGHTINGALE_TOKEN_FILE": "{NIGHTINGALE_DIR}/data/mcp-token"
     },
-    "optional_env": []
+    "optional_env": [
+      "NIGHTINGALE_DATA_DIR"
+    ]
   },
   "provides": {
     "skills": [
@@ -79,6 +69,12 @@
         "computation",
         "dataset"
       ]
+    },
+    "absorbed_by": {
+      "id": "nightingale",
+      "repository": "https://github.com/Luissalet/NightingalesHoard",
+      "module": "calculation",
+      "standalone": false
     }
   }
 }

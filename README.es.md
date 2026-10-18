@@ -1,3 +1,5 @@
+> **Absorbido por [Nightingale's Hoard](https://github.com/Luissalet/NightingalesHoard).** Todas sus funciones y datos se conservan en el módulo independiente Cálculo, OFF por defecto. Este repositorio queda como fuente histórica e identidad de compatibilidad; deja de ser un destino de arranque independiente. Sus datos permanecen en su ruta. La documentación inferior describe la implementación anterior.
+
 <img src="app-icon.png" width="96" alt="">
 
 # Laplace's Hoard
