@@ -1,4 +1,4 @@
-> **Absorbed by [Nightingale's Hoard](https://github.com/Luissalet/NightingalesHoard).** All functions and existing data are preserved in its independent Calculation module, OFF by default. This repository is retained as historical source and compatibility identity; it is no longer a standalone launch target. Its data remains in place. The documentation below describes the original implementation.
+> **Absorbed by [Nightingale's Hoard](https://github.com/Luissalet/NightingalesHoard).** All functions and existing data are preserved in its independent Calculation module, OFF by default. This repository is retained as historical source and compatibility identity; it is no longer a standalone launch target. Data and capabilities are managed through Nightingale's Hoard. The documentation below describes the original implementation.
 
 <img src="app-icon.png" width="96" alt="">
 
